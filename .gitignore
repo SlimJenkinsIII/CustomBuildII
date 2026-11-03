@@ -1,0 +1,20 @@
+# PRIVACY: real financial data must never be committed.
+# Keep real statements in a folder named "private-data" (ignored) or anywhere outside this repo.
+private-data/
+*.csv
+*.ofx
+*.qfx
+*.pdf
+*.xlsx
+*.db
+*.sqlite
+*.sqlite3
+*.backup
+*.enc
+.env
+.env.*
+node_modules/
+_site/
+.DS_Store
+# Fake sample statements are allowed (only inside samples/)
+!samples/*.csv

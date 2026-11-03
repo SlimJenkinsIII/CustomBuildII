@@ -1,0 +1,10 @@
+{
+  "name": "my-budget",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "privacy": "bash scripts/check-privacy.sh",
+    "e2e": "node test/e2e.cjs"
+  }
+}

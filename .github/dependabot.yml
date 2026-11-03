@@ -1,0 +1,11 @@
+# Keeps the GitHub tools used by the publish workflow up to date. It opens a pull request when one has a new
+# version; nothing changes until you merge it. (The app itself has no outside code to update.)
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

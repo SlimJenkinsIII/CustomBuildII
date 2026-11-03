@@ -66,6 +66,19 @@ server.listen(0, async () => {
     check('no real statements ride along', !fs.readdirSync(path.join(SITE, 'samples')).some(f => !f.startsWith('FAKE-')));
   }
   check('starts empty, unlocked', await page.locator('#empty').isVisible() && await page.locator('#lock').isHidden());
+  // ---------- other sites cannot show this app in a frame ----------
+  check('the app reveals itself when it is the top-level page', await page.evaluate(() => getComputedStyle(document.documentElement).display !== 'none' && !document.getElementById('antiframe')));
+  const framer = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(`<iframe id="f" src="${URL}" width="900" height="700"></iframe>`); });
+  await new Promise(resolve => framer.listen(0, resolve));
+  const other = await ctx.newPage();
+  await other.goto(`http://127.0.0.1:${framer.address().port}/`);          // a different address, like an attacker's page
+  await other.frameLocator('#f').locator('body').waitFor({ state: 'attached' });
+  const inner = other.frames().find(f => f !== other.mainFrame());
+  await inner.waitForLoadState('load');
+  check('inside another site\'s frame the app stays hidden', (await inner.evaluate(() => getComputedStyle(document.documentElement).display)) === 'none');
+  check('and none of its controls can be reached or seen there', !(await inner.locator('#gear').isVisible()) && !(await inner.locator('#file').isVisible()));
+  await other.close(); framer.close();
+
   const labels = await page.locator('[role=tab]').allTextContents();
   check('seven tabs in the right order', labels.join('|') === 'Summary|Budget|Investments|Savings|TB Summary|Tie-out|GL Detail', labels.join('|'));
   check('Budget is the landing tab', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');

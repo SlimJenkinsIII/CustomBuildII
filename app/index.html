@@ -178,11 +178,7 @@
     svg.chart .hit-col { cursor: pointer; }
     svg.chart .hit-col:focus { outline: none; }
     svg.chart .hit-col:focus-visible { stroke: var(--ink); stroke-width: 2; }
-    .seg.fs-nav { align-self: flex-start; max-width: 100%; }
-    @media (max-width: 480px) {
-      .seg.fs-nav { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: 16px; align-self: stretch; }
-      .seg.fs-nav button { padding: 8px 6px; text-align: center; }
-    }
+    .fs-page { align-self: flex-start; font-size: 15px; padding: 8px 14px; }
     .key i.dash { width: 14px; height: 2px; border-radius: 1px; background: var(--ink); opacity: .6; }
     .catdelta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .seg { flex-wrap: wrap; }
@@ -373,12 +369,12 @@
       </div>
 
       <div class="panel" id="panel-fs" role="tabpanel" aria-labelledby="tab-fs" hidden>
-        <div class="seg fs-nav" id="fs-nav" role="group" aria-label="Financial statements">
-          <button type="button" data-page="tb" aria-pressed="true">TB Summary</button>
-          <button type="button" data-page="bs" aria-pressed="false">Balance Sheet</button>
-          <button type="button" data-page="is" aria-pressed="false">Income Statement</button>
-          <button type="button" data-page="gl" aria-pressed="false">GL Detail</button>
-        </div>
+        <select id="fs-page" class="fs-page" aria-label="Financial statement">
+        <option value="tb">TB Summary</option>
+        <option value="bs">Balance Sheet</option>
+        <option value="is">Income Statement</option>
+        <option value="gl">GL Detail</option>
+      </select>
         <div class="panel" id="page-tb"><section class="card" id="fs-tb" aria-labelledby="fs-tb-title"></section></div>
         <div class="panel" id="page-bs" hidden><section class="card" id="fs-bs" aria-labelledby="fs-bs-title"></section></div>
         <div class="panel" id="page-is" hidden><section class="card" id="fs-is" aria-labelledby="fs-is-title"></section></div>

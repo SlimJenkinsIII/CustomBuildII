@@ -23,7 +23,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {},
-  txs: [], ym: null, year: null, tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
+  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
@@ -370,9 +370,8 @@ function meter(spent, target, label) {
 
 function renderBudgetSummary(d, asOf) {
   const t = d.totals;
-  const toggle = h('div', { class: 'seg', role: 'group', 'aria-label': 'Time period' }, PERIODS.map(([k, short, long]) =>
-    h('button', { type: 'button', text: short, 'aria-label': long, 'aria-pressed': String(state.period === k),
-      onclick: () => { state.period = k; renderBudget(asOf, false); } })));
+  const toggle = h('select', { id: 'bgt-period', 'aria-label': 'Time period', onchange: e => { state.period = e.target.value; renderBudget(asOf, false); } },
+    PERIODS.map(([k, , long]) => h('option', { value: k, text: long, selected: state.period === k })));
 
   // a week still in progress, after the last full one, is left out of the numbers but not hidden
   const lastFull = d.complete[d.complete.length - 1];
@@ -645,9 +644,28 @@ function renderMonth(asOf, keepFocus) {
 }
 
 // ---------- trial balance and income statement (TB Summary tab) ----------
-const TB_VIEWS = [['bal', 'Balances'], ['act', 'Activity']];
-const viewToggle = asOf => h('div', { class: 'seg', role: 'group', 'aria-label': 'View' },
-  TB_VIEWS.map(([id, label]) => h('button', { type: 'button', text: label, 'aria-pressed': String(state.tbView === id), onclick: () => { state.tbView = id; renderTrialBalance(asOf); } })));
+const TB_VIEWS = [['bal', 'Month-end balances'], ['act', 'Monthly activity']];
+const viewToggle = asOf => h('select', { id: 'tb-view', 'aria-label': 'View', onchange: e => { state.tbView = e.target.value; renderTrialBalance(asOf); } },
+  TB_VIEWS.map(([id, label]) => h('option', { value: id, text: label, selected: state.tbView === id })));
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const yearsOf = () => [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
+// The month picked for the Income Statement and Balance Sheet: '' means the full year.
+function pickedMonth() {
+  const ok = state.month && state.month.startsWith(state.year + '-') && state.txs.some(t => t.date.startsWith(state.month));
+  return ok ? state.month : '';
+}
+// Year and month dropdowns shared by the two statements.
+function periodPickers(asOf, id) {
+  const yms = [...new Set(state.txs.filter(t => t.date.startsWith(state.year + '-')).map(t => t.date.slice(0, 7)))].sort();
+  const mo = pickedMonth();
+  const year = h('select', { id: `year-${id}`, 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, `year-${id}`); } },
+    yearsOf().map(y => h('option', { value: y, text: y, selected: y === state.year })));
+  const month = h('select', { id: `month-${id}`, 'aria-label': 'Month', onchange: e => { state.month = e.target.value; renderFS(asOf, `month-${id}`); } },
+    h('option', { value: '', text: 'Full year', selected: !mo }),
+    yms.map(ym => h('option', { value: ym, text: MONTH_NAMES[Number(ym.slice(5)) - 1], selected: ym === mo })));
+  return h('div', { class: 'row-form' }, month, year);
+}
 
 // The three statement pages are drawn together, so a change of year shows on all of them.
 function renderFS(asOf, focusId) {
@@ -668,7 +686,7 @@ const fmtFull = iso => dateOf(iso).toLocaleDateString('en-US', { month: 'short',
 
 function renderTrialBalance(asOf) {
   const bal = state.tbView === 'bal';
-  const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
+  const years = yearsOf();
   const tb = trialBalance(state.txs, state.year, asOf, state.opening);
   const shown = bal ? tb.rows : tb.rows.filter(r => tb.months.some(ym => r.byMonth[ym] !== 0));
   const shownMonth = ym => (bal ? tb.reached[ym] : tb.hasData[ym]);
@@ -730,9 +748,6 @@ function renderTrialBalance(asOf) {
     years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
   fill($('fs-tb'),
     h('div', { class: 'card-head' }, h('h2', { id: 'fs-tb-title', text: bal ? 'Trial balance, month end' : 'Trial balance, monthly activity' }), h('div', { class: 'row-form' }, viewToggle(asOf), select)),
-    h('p', { class: 'sub', text: bal
-      ? `Accounts in number order. Each column is where the account stands at month end, starting from ${fmtFull(tb.openDate)}. Debits are plain numbers, credits in brackets. Income and spending start again each January; last year’s result moves to retained earnings. Whole dollars.`
-      : 'Accounts in number order. Each column is that month’s movement: debits as plain numbers, credits in brackets. Whole dollars. Savings accounts show only what you moved in or out, since their own statements aren’t imported.' }),
     !tb.hasOpening && h('div', { class: 'notice' }, h('span', { text: 'No opening balances yet, so balances start from zero. Enter what each account held on your opening date to tie to your statements.' }),
       h('button', { class: 'btn', type: 'button', text: 'Enter opening balances', onclick: () => openSettings('opening') })),
     before > 0 && h('p', { class: 'note', text: `${plural(before, 'transaction', 'transactions')} dated on or before ${fmtFull(state.opening.date)} ${before === 1 ? 'is' : 'are'} before the books start and ${before === 1 ? 'isn’t' : 'aren’t'} in this view.` }),
@@ -743,65 +758,97 @@ function renderTrialBalance(asOf) {
 }
 
 function renderBalanceSheet(asOf) {
-  const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
   const bs = balanceSheet(state.txs, state.year, asOf, state.opening);
+  const mo = pickedMonth();
+  const mi = mo ? Number(mo.slice(5)) - 1 : -1;
   const shown = ym => bs.reached[ym];
+  // The month before the one picked; for January that is last December (or the opening balance).
+  const prevBs = mo && mi === 0 ? balanceSheet(state.txs, String(Number(state.year) - 1), asOf, state.opening) : null;
+  const prevDec = `${Number(state.year) - 1}-12`;
+  const prior = (group, r) => {
+    if (mi > 0) return r ? r.byMonth[bs.months[mi - 1]] : group === 'earnings' ? bs.equity.earnings.byMonth[bs.months[mi - 1]] : bs[group].byMonth[bs.months[mi - 1]];
+    if (prevBs && prevBs.reached[prevDec]) {
+      if (group === 'earnings') return prevBs.equity.earnings.byMonth[prevDec];
+      const src = r ? prevBs[group].rows.find(x => x.key === r.key) : prevBs[group];
+      return src ? src.byMonth[prevDec] : 0;
+    }
+    return r ? r.open : group === 'earnings' ? 0 : bs[group].open;
+  };
 
-  const head = h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'Account' }),
-    h('th', {}, 'Opening', h('small', { text: fmtFull(bs.openDate) })),
-    bs.months.map((ym, i) => h('th', {}, MONTH_ABBR[i], ym === bs.partialMonth && h('small', { text: `to the ${Number(asOf.slice(8))}th` }))));
+  const cols = mo
+    ? [h('th', {}, MONTH_ABBR[mi], bs.partialMonth === mo && h('small', { text: `to the ${Number(asOf.slice(8))}th` })),
+       h('th', {}, mi > 0 ? MONTH_ABBR[mi - 1] : 'Prior', h('small', { text: mi > 0 ? 'month end' : 'year end' })),
+       h('th', {}, 'Change')]
+    : [h('th', {}, 'Opening', h('small', { text: fmtFull(bs.openDate) })),
+       bs.months.map((ym, i) => h('th', {}, MONTH_ABBR[i], ym === bs.partialMonth && h('small', { text: `to the ${Number(asOf.slice(8))}th` })))];
+  const head = h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'Account' }), cols);
+  const span = mo ? 3 : 13;
 
   const body = h('tbody');
-  const emptyCells = () => bs.months.map(() => h('td', { class: 'empty', text: '·' }));
-  const header = label => body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: 13 })));
-  const accountRow = r => {
-    const tr = h('tr', {}, h('td', { class: 'acct' }, r.code && h('span', { class: 'code', text: r.code }), r.name), h('td', { text: whole(r.open) }));
-    bs.months.forEach((ym, i) => {
-      if (!shown(ym)) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
-      const v = r.byMonth[ym], target = drillFor(r, ym), td = h('td');
-      if (v !== 0 && target) {
-        td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
-          'aria-label': `${r.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
-      } else td.textContent = whole(v);
-      tr.append(td);
-    });
+  const dot = () => h('td', { class: 'empty', text: '·' });
+  const header = label => body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: span })));
+  // One line of numbers: either the whole year across, or the month against the month before.
+  const numbers = (tr, group, r, t) => {
+    const src = r ?? t;
+    if (!mo) {
+      tr.append(h('td', { text: whole(src.open) }));
+      bs.months.forEach((ym, i) => {
+        if (!shown(ym)) { tr.append(dot()); return; }
+        const v = src.byMonth[ym], target = r && drillFor(r, ym), td = h('td');
+        if (r && v !== 0 && target) {
+          td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
+            'aria-label': `${r.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+        } else td.textContent = whole(v);
+        tr.append(td);
+      });
+      return;
+    }
+    const cur = src.byMonth[mo], was = prior(group, r);
+    if (!shown(mo)) { tr.append(dot(), dot(), dot()); return; }
+    const target = r && drillFor(r, mo), td = h('td');
+    if (r && cur !== 0 && target) {
+      td.append(h('button', { type: 'button', class: 'cell', text: whole(cur),
+        'aria-label': `${r.name}, ${MONTH_ABBR[mi]}: ${money(cur)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+    } else td.textContent = whole(cur);
+    tr.append(td, h('td', { text: whole(was) }), h('td', { text: whole(cur - was) }));
+  };
+  const accountRow = group => r => {
+    const tr = h('tr', {}, h('td', { class: 'acct' }, r.code && h('span', { class: 'code', text: r.code }), r.name));
+    numbers(tr, group, r, null);
     body.append(tr);
   };
-  const totalRow = (label, t, cls) => {
-    const tr = h('tr', { class: cls }, h('td', { class: 'acct', text: label }), h('td', { text: whole(t.open) }));
-    for (const ym of bs.months) tr.append(shown(ym) ? h('td', { text: whole(t.byMonth[ym]) }) : h('td', { class: 'empty', text: '·' }));
+  const totalRow = (label, group, t, cls) => {
+    const tr = h('tr', { class: cls }, h('td', { class: 'acct', text: label }));
+    numbers(tr, group, null, t);
     body.append(tr);
   };
 
-  header('Assets: what you have');
-  bs.assets.rows.forEach(accountRow);
-  totalRow('Total assets', bs.assets, 'tot');
+  header('Assets');
+  bs.assets.rows.forEach(accountRow('assets'));
+  totalRow('Total assets', 'assets', bs.assets, 'tot');
   if (bs.liabilities.rows.length) {
-    header('Liabilities: what you owe');
-    bs.liabilities.rows.forEach(accountRow);
-    totalRow('Total liabilities', bs.liabilities, 'tot');
+    header('Liabilities');
+    bs.liabilities.rows.forEach(accountRow('liabilities'));
+    totalRow('Total liabilities', 'liabilities', bs.liabilities, 'tot');
   }
-  header('Equity: what is left');
-  bs.equity.rows.forEach(accountRow);
-  const earnings = h('tr', {}, h('td', { class: 'acct', text: 'Earnings so far this year' }), h('td', { text: whole(0) }));
-  for (const ym of bs.months) earnings.append(shown(ym) ? h('td', { text: whole(bs.equity.earnings.byMonth[ym]) }) : h('td', { class: 'empty', text: '·' }));
+  header('Equity');
+  bs.equity.rows.forEach(accountRow('equity'));
+  const earnings = h('tr', {}, h('td', { class: 'acct', text: 'Current year earnings' }));
+  numbers(earnings, 'earnings', null, { open: 0, byMonth: bs.equity.earnings.byMonth });
   body.append(earnings);
-  totalRow('Total equity', bs.equity, 'tot');
-  totalRow('Total liabilities & equity', bs.liabilitiesAndEquity, 'tot2');
-  totalRow('Difference (should be –)', bs.difference, 'net');
+  totalRow('Total equity', 'equity', bs.equity, 'tot');
+  totalRow('Total liabilities & equity', 'liabilitiesAndEquity', bs.liabilitiesAndEquity, 'tot2');
+  totalRow('Difference', 'difference', bs.difference, 'net');
 
   const balanced = bs.difference.open === 0 && bs.months.every(ym => !shown(ym) || bs.difference.byMonth[ym] === 0);
-  const select = h('select', { id: 'year-bs', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-bs'); } },
-    years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
   fill($('fs-bs'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'fs-bs-title', text: 'Balance sheet' }), select),
-    h('p', { class: 'sub', text: `Where you stand at the end of each month, starting from ${fmtFull(bs.openDate)}. What you owe and equity are shown as positive numbers, so assets equal liabilities plus equity. Earnings so far this year are income less spending since January. Whole dollars. Savings accounts only show what you moved in or out, since their own statements aren’t imported.` }),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-bs-title', text: mo ? `Balance sheet, ${MONTH_NAMES[mi]} ${state.year}` : `Balance sheet, ${state.year}` }), periodPickers(asOf, 'bs')),
     !bs.hasOpening && h('div', { class: 'notice' }, h('span', { text: 'No opening balances yet, so every balance starts from zero. Enter what each account held on your opening date to tie to your statements.' }),
       h('button', { class: 'btn', type: 'button', text: 'Enter opening balances', onclick: () => openSettings('opening') })),
     h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
     h('div', { class: 'mx-legend' },
-      h('span', { class: balanced ? 'ok' : 'bad', text: balanced ? '✓ Assets equal liabilities plus equity in every column' : '✗ Out of balance: see the Difference row' }),
-      h('span', { text: 'Tap a number to see that month’s transactions. Scroll sideways for more months.' })));
+      h('span', { class: balanced ? 'ok' : 'bad', text: balanced ? '✓ Assets = liabilities + equity' : '✗ Out of balance: see the Difference row' }),
+      h('span', { text: 'Whole dollars. Tap a number to see its transactions.' })));
 }
 
 // ---------- tie-out: where did the cash go? ----------
@@ -918,36 +965,55 @@ const whole = c => {
 };
 
 function renderMatrix(asOf) {
-  const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
   const m = monthlyMatrix(state.txs, state.year, asOf);
+  const mo = pickedMonth();
+  const mi = mo ? Number(mo.slice(5)) - 1 : -1;
   const isPartial = ym => ym === m.partialMonth;
+  const partialNote = ym => isPartial(ym) && h('small', { text: `to the ${Number(asOf.slice(8))}th` });
+  const ytdOf = l => m.months.filter(ym => ym <= mo).reduce((sum, ym) => sum + (l.byMonth[ym] ?? 0), 0);
 
-  const head = h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'GL account' }),
-    m.months.map((ym, i) => h('th', {}, MONTH_ABBR[i], isPartial(ym) && h('small', { text: `to the ${Number(asOf.slice(8))}th` }))),
-    h('th', { class: 'avg' }, 'Avg / mo', h('small', { text: 'full months' })),
-    h('th', { class: 'total' }, 'Year to date'));
+  const head = mo
+    ? h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'GL account' }),
+        h('th', {}, MONTH_ABBR[mi], partialNote(mo)),
+        h('th', { class: 'total' }, 'Year to date', h('small', { text: `through ${MONTH_ABBR[mi]}` })))
+    : h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'GL account' }),
+        m.months.map((ym, i) => h('th', {}, MONTH_ABBR[i], partialNote(ym))),
+        h('th', { class: 'avg' }, 'Avg / mo', h('small', { text: 'full months' })),
+        h('th', { class: 'total' }, 'Year to date'));
 
   const body = h('tbody');
+  const span = mo ? 3 : 14;
+  const drillCell = (l, ym, v) => {
+    const td = h('td');
+    if (l.kind === 'row' && v !== 0) {
+      td.append(h('button', { type: 'button', class: 'cell', text: whole(v), 'aria-label': `${l.name}, ${MONTH_ABBR[Number(ym.slice(5)) - 1]}: ${money(v)}. Show these transactions.`,
+        onclick: () => drill({ type: 'category', id: l.id, ym }) }));
+    } else td.textContent = whole(v);
+    return td;
+  };
   for (const l of m.lines) {
     if (l.kind === 'header') {
-      body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: 14 })));
+      body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
       continue;
     }
+    if (mo && l.kind === 'running') continue;
     const cls = { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
     const tr = h('tr', { class: cls }, h('td', { class: 'acct' }, l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label));
+    if (mo) {
+      tr.append(m.hasData[mo] ? drillCell(l, mo, l.byMonth[mo]) : h('td', { class: 'empty', text: '·' }), h('td', { class: 'total', text: whole(ytdOf(l)) }));
+      body.append(tr);
+      continue;
+    }
     m.months.forEach(ym => {
       const v = l.byMonth[ym];
-      if (v === null || (!m.hasData[ym])) { tr.append(h('td', { class: 'empty', text: '\u00b7' })); return; }
+      if (v === null || (!m.hasData[ym])) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
       let tone = '';
       if (l.kind === 'row' && l.group !== 'income' && m.fullMonthCount >= 3 && !isPartial(ym) && l.avg > 0) {
         const off = v - l.avg;
         if (Math.abs(off) >= Math.max(5000, l.avg * 0.25)) tone = off > 0 ? 'hi' : 'lo';
       }
-      const td = h('td', { class: tone });
-      if (l.kind === 'row' && v !== 0) {
-        td.append(h('button', { type: 'button', class: 'cell', text: whole(v), 'aria-label': `${l.name}, ${MONTH_ABBR[Number(ym.slice(5)) - 1]}: ${money(v)}. Show these transactions.`,
-          onclick: () => drill({ type: 'category', id: l.id, ym }) }));
-      } else td.textContent = whole(v);
+      const td = drillCell(l, ym, v);
+      if (tone) td.className = tone;
       tr.append(td);
     });
     if (l.kind === 'running') { tr.append(h('td', { class: 'avg' }), h('td', { class: 'total' })); }
@@ -955,16 +1021,13 @@ function renderMatrix(asOf) {
     body.append(tr);
   }
 
-  const select = h('select', { id: 'year-is', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-is'); } },
-    years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
   fill($('fs-is'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'fs-is-title', text: 'Income statement' }), select),
-    h('p', { class: 'sub', text: 'Whole dollars. Down to Net operating income, money spent shows as a positive number. Below it, brackets reduce net income, so each total adds up. Transfers between your own accounts are left out.' }),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-is-title', text: mo ? `Income statement, ${MONTH_NAMES[mi]} ${state.year}` : `Income statement, ${state.year}` }), periodPickers(asOf, 'is')),
     h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
     h('div', { class: 'mx-legend' },
-      m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-watch)' }), 'Well above that line\u2019s monthly average'),
-      m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-good)' }), 'Well below it'),
-      h('span', { text: 'Tap a number to see its transactions. Scroll sideways for more months.' })));
+      !mo && m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-watch)' }), 'Well above that line’s monthly average'),
+      !mo && m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-good)' }), 'Well below it'),
+      h('span', { text: 'Whole dollars. Tap a number to see its transactions.' })));
 }
 
 // ---------- tabs and the main render ----------
@@ -981,7 +1044,7 @@ function applyTab() {
     $(`panel-${name}`).hidden = state.tab !== name || (NEEDS_DATA.has(name) && !has);
   }
   for (const [id] of FS_PAGES) $(`page-${id}`).hidden = state.fsPage !== id;
-  for (const b of document.querySelectorAll('#fs-nav button')) b.setAttribute('aria-pressed', String(b.dataset.page === state.fsPage));
+  $('fs-page').value = state.fsPage;
   $('empty').hidden = has || !NEEDS_DATA.has(state.tab);
 }
 
@@ -1000,7 +1063,7 @@ function setFsPage(page) {
   if (page === 'gl' && state.txs.length) renderLedger();
   applyTab();
 }
-for (const b of document.querySelectorAll('#fs-nav button')) b.addEventListener('click', () => setFsPage(b.dataset.page));
+$('fs-page').addEventListener('change', e => setFsPage(e.target.value));
 
 // Coming back from a drill-down returns to the page you came from, and drops its filter so GL Detail isn't left showing one slice.
 $('gl-back').addEventListener('click', () => {

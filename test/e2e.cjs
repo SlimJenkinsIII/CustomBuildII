@@ -53,8 +53,8 @@ server.listen(0, async () => {
   };
   const closeSheet = () => page.click('#settings-close');
   const glRow = text => page.locator('#out tbody tr', { hasText: text }).first();
-  const goFS = async pg => { await page.click('#tab-fs'); await page.click(`#fs-nav [data-page="${pg}"]`); };
-  const onGL = async () => (await page.getAttribute('#tab-fs', 'aria-selected')) === 'true' && (await page.getAttribute('#fs-nav [data-page="gl"]', 'aria-pressed')) === 'true';
+  const goFS = async pg => { await page.click('#tab-fs'); await page.selectOption('#fs-page', pg); };
+  const onGL = async () => (await page.getAttribute('#tab-fs', 'aria-selected')) === 'true' && (await page.inputValue('#fs-page')) === 'gl';
 
   // ---------- layout ----------
   await page.goto(URL);
@@ -108,11 +108,11 @@ server.listen(0, async () => {
   check('it leads with the effect on savings', /^[+\u2212]\$/.test((await page.textContent('#bgt-summary .hero-num')).trim()));
   const bars = () => page.locator('#bgt-weeks g.hit').count();
   check('week by week: one bar per full week (4)', (await bars()) === 4);
-  await page.click('#bgt-summary button[aria-label="Last 8 weeks"]');
+  await page.selectOption('#bgt-period', '8w');
   check('8 weeks shows 8 bars and updates the heading', (await bars()) === 8 && (await page.textContent('#bgt-title')) === 'Last 8 weeks');
-  await page.click('#bgt-summary button[aria-label="Year to date"]');
+  await page.selectOption('#bgt-period', 'ytd');
   check('year to date shows every full week this year (9)', (await bars()) === 9);
-  await page.click('#bgt-summary button[aria-label="Last 4 weeks"]');
+  await page.selectOption('#bgt-period', '4w');
   check('the savings card has a running-total line', await page.locator('#bgt-savings svg path.line').count() === 1 && /since/.test(await page.textContent('#bgt-savings')));
   check('the numbers table is available behind the chart', (await page.locator('#bgt-weeks details tbody tr').count()) === 4);
   await page.locator('#bgt-weeks g.hit').first().click();
@@ -165,7 +165,7 @@ server.listen(0, async () => {
   const codes = await page.locator('#fs-tb tbody tr:not(.hdr):not(.tot):not(.tot2):not(.net):not(.run) .code').allTextContents();
   check('TB Summary lists accounts in number order', codes.length > 10 && codes.join() === [...codes].sort().join(), codes.slice(0, 8).join(' '));
   check('TB Summary says every month balances', /Every month balances/.test(await page.locator('#fs-tb .mx-legend').textContent()));
-  check('TB Summary is on the Balances view by default', (await page.locator('#fs-tb .seg [aria-pressed="true"]').textContent()) === 'Balances');
+  check('TB Summary is on the Balances view by default', (await page.inputValue('#tb-view')) === 'bal');
   await goFS('is');
   check('the Income Statement page is there, with its own layout', /Net operating income/.test(await page.locator('#fs-is').textContent()) && /Net income \(loss\)/.test(await page.locator('#fs-is').textContent()));
   await goFS('tb');
@@ -193,13 +193,13 @@ server.listen(0, async () => {
   const diff = await cells('Difference');
   check('every balance column adds to zero', diff.slice(1, 5).every(t => t === '\u2013'), diff.slice(0, 6).join(' | '));
   check('no more opening-balance nudge', !(await page.locator('#fs-tb').textContent()).includes('No opening balances yet'));
-  await page.click('#fs-tb >> text=Activity');
+  await page.selectOption('#tb-view', 'act');
   const actInc = await cells('Paycheck');
   check('the Activity view still shows each month\'s movement', actInc[1] === '(4,200)' && actInc[2] === '(4,200)', actInc.slice(0, 4).join(' | '));
-  await page.click('#fs-tb >> text=Balances');
+  await page.selectOption('#tb-view', 'bal');
 
   // ---------- F/S: four pages ----------
-  const pages = await page.locator('#fs-nav button').allTextContents();
+  const pages = await page.locator('#fs-page option').allTextContents();
   check('F/S has four pages, in order', pages.join('|') === 'TB Summary|Balance Sheet|Income Statement|GL Detail', pages.join('|'));
   await goFS('bs');
   const bsRow = async name => (await page.locator('#fs-bs tbody tr', { hasText: name }).first().locator('td').allTextContents()).map(t => t.trim());
@@ -209,16 +209,31 @@ server.listen(0, async () => {
   check('...what you owe: $200', owed[1] === '200', owed.slice(0, 3).join(' | '));
   check('...and equity of $5,800', equity[1] === '5,800', equity.slice(0, 3).join(' | '));
   check('equity grows with earnings, month by month', num(equity[2]) > 5800 && num(equity[3]) > num(equity[2]), equity.slice(1, 4).join(' | '));
-  check('assets equal liabilities plus equity in every column', bsDiff.slice(1, 5).every(t => t === '\u2013') && /Assets equal liabilities plus equity/.test(await page.locator('#fs-bs .mx-legend').textContent()), bsDiff.slice(0, 5).join(' | '));
+  check('assets equal liabilities plus equity in every column', bsDiff.slice(1, 5).every(t => t === '\u2013') && /Assets = liabilities \+ equity/.test(await page.locator('#fs-bs .mx-legend').textContent()), bsDiff.slice(0, 5).join(' | '));
   await page.locator('#fs-bs button.cell').first().click();
   check('a Balance Sheet number opens GL Detail, with a way back to the Balance Sheet', (await onGL()) && /Back to Balance Sheet/.test(await page.textContent('#gl-back')));
   await page.click('#gl-back');
-  check('Back lands on the Balance Sheet', (await page.getAttribute('#fs-nav [data-page="bs"]', 'aria-pressed')) === 'true' && await page.locator('#fs-bs').isVisible());
+  check('Back lands on the Balance Sheet', (await page.inputValue('#fs-page')) === 'bs' && await page.locator('#fs-bs').isVisible());
+  // ---------- month / year dropdowns on the Balance Sheet and Income Statement ----------
+  await goFS('bs');
+  const moOpts = await page.locator('#month-bs option').allTextContents();
+  check('Balance Sheet month dropdown starts with Full year', moOpts[0] === 'Full year' && moOpts.length > 1, moOpts.join('|'));
+  const fullCols = await page.locator('#fs-bs thead th').count();
+  await page.selectOption('#month-bs', { index: 1 });
+  check('picking a month shows month end, prior and change columns', (await page.locator('#fs-bs thead th').count()) === 4, String(await page.locator('#fs-bs thead th').count()));
+  check('Balance Sheet has no explanatory text beside accounts', !/what you have|what you owe|what is left/i.test(await page.locator('#fs-bs').textContent()));
+  await page.selectOption('#month-bs', '');
+  check('Full year brings the month columns back', (await page.locator('#fs-bs thead th').count()) === fullCols);
+  await goFS('is');
+  await page.selectOption('#month-is', { index: 1 });
+  check('Income Statement month view has month and year-to-date columns', (await page.locator('#fs-is thead th').count()) === 3, String(await page.locator('#fs-is thead th').count()));
+  await page.selectOption('#month-is', '');
+  await goFS('tb');
   await goFS('tb');
   await page.locator('#fs-tb button.cell').first().click();
   check('a TB Summary number opens GL Detail, with a way back to TB Summary', (await onGL()) && /Back to TB Summary/.test(await page.textContent('#gl-back')));
   await page.click('#gl-back');
-  check('Back lands on TB Summary, and GL Detail is no longer filtered', (await page.getAttribute('#fs-nav [data-page="tb"]', 'aria-pressed')) === 'true' && await page.locator('#fs-tb').isVisible());
+  check('Back lands on TB Summary, and GL Detail is no longer filtered', (await page.inputValue('#fs-page')) === 'tb' && await page.locator('#fs-tb').isVisible());
   await goFS('gl');
   check('opening GL Detail directly shows everything, with no Back button', (await txCount()) === n && await page.locator('#gl-back').isHidden());
   await goFS('tb');

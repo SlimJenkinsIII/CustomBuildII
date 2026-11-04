@@ -53,6 +53,8 @@ server.listen(0, async () => {
   };
   const closeSheet = () => page.click('#settings-close');
   const glRow = text => page.locator('#out tbody tr', { hasText: text }).first();
+  const goFS = async pg => { await page.click('#tab-fs'); await page.click(`#fs-nav [data-page="${pg}"]`); };
+  const onGL = async () => (await page.getAttribute('#tab-fs', 'aria-selected')) === 'true' && (await page.getAttribute('#fs-nav [data-page="gl"]', 'aria-pressed')) === 'true';
 
   // ---------- layout ----------
   await page.goto(URL);
@@ -80,7 +82,7 @@ server.listen(0, async () => {
   await other.close(); framer.close();
 
   const labels = await page.locator('[role=tab]').allTextContents();
-  check('seven tabs in the right order', labels.join('|') === 'Summary|Budget|Investments|Savings|TB Summary|Tie-out|GL Detail', labels.join('|'));
+  check('six tabs in the right order, with F/S replacing TB Summary and GL Detail', labels.join('|') === 'Summary|Budget|Investments|Savings|F/S|Tie-out', labels.join('|'));
   check('Budget is the landing tab', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
   for (const t of ['summary', 'investments', 'savings']) {
     await page.click(`#tab-${t}`);
@@ -114,7 +116,7 @@ server.listen(0, async () => {
   check('the savings card has a running-total line', await page.locator('#bgt-savings svg path.line').count() === 1 && /since/.test(await page.textContent('#bgt-savings')));
   check('the numbers table is available behind the chart', (await page.locator('#bgt-weeks details tbody tr').count()) === 4);
   await page.locator('#bgt-weeks g.hit').first().click();
-  check('tapping a week opens its transactions, with a way back', (await page.getAttribute('#tab-gl', 'aria-selected')) === 'true' && /^Week of/.test((await page.textContent('#chips')).trim()) && /Back to Budget/.test(await page.textContent('#gl-back')));
+  check('tapping a week opens its transactions, with a way back', (await onGL()) && /^Week of/.test((await page.textContent('#chips')).trim()) && /Back to Budget/.test(await page.textContent('#gl-back')));
   await page.click('#gl-back');
   check('and Back returns to Budget', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
   check('Month in review defaults to the latest finished month', (await page.inputValue('#month')) === '2026-02');
@@ -158,20 +160,20 @@ server.listen(0, async () => {
   await page.fill('#code-free_gifts', '12'); await page.press('#code-free_gifts', 'Tab');
   check('non-4-digit number refused', /4-digit/.test(await page.textContent('#settings-body')));
   await closeSheet();
-  await page.click('#tab-tb');
-  check('TB Summary follows the new number', (await page.locator('#matrix').textContent()).includes('5455'));
-  const codes = await page.locator('#matrix tbody tr:not(.hdr):not(.tot):not(.tot2):not(.net):not(.run) .code').allTextContents();
+  await goFS('tb');
+  check('TB Summary follows the new number', (await page.locator('#fs-tb').textContent()).includes('5455'));
+  const codes = await page.locator('#fs-tb tbody tr:not(.hdr):not(.tot):not(.tot2):not(.net):not(.run) .code').allTextContents();
   check('TB Summary lists accounts in number order', codes.length > 10 && codes.join() === [...codes].sort().join(), codes.slice(0, 8).join(' '));
-  check('TB Summary says every month balances', /Every month balances/.test(await page.locator('#matrix .mx-legend').textContent()));
-  check('TB Summary is on the Balances view by default', (await page.locator('#matrix .seg [aria-pressed="true"]').textContent()) === 'Balances');
-  await page.click('#matrix >> text=Income statement');
-  check('the income statement view is still available', /Net operating income/.test(await page.locator('#matrix').textContent()));
-  await page.click('#matrix >> text=Balances');
+  check('TB Summary says every month balances', /Every month balances/.test(await page.locator('#fs-tb .mx-legend').textContent()));
+  check('TB Summary is on the Balances view by default', (await page.locator('#fs-tb .seg [aria-pressed="true"]').textContent()) === 'Balances');
+  await goFS('is');
+  check('the Income Statement page is there, with its own layout', /Net operating income/.test(await page.locator('#fs-is').textContent()) && /Net income \(loss\)/.test(await page.locator('#fs-is').textContent()));
+  await goFS('tb');
 
   // ---------- opening balances: the TB starts from them, then shows month-end balances ----------
-  check('Balances is the default TB view, with an Opening column', /Opening/.test(await page.locator('#matrix thead').textContent()) && /Dec 31, 2025/.test(await page.locator('#matrix thead').textContent()));
-  check('it nudges you to enter opening balances', /No opening balances yet/.test(await page.locator('#matrix').textContent()));
-  await page.click('#matrix >> text=Enter opening balances');
+  check('Balances is the default TB view, with an Opening column', /Opening/.test(await page.locator('#fs-tb thead').textContent()) && /Dec 31, 2025/.test(await page.locator('#fs-tb thead').textContent()));
+  check('it nudges you to enter opening balances', /No opening balances yet/.test(await page.locator('#fs-tb').textContent()));
+  await page.click('#fs-tb >> text=Enter opening balances');
   check('the opening date starts at 12/31/2024', (await page.inputValue('#open-date')) === '2024-12-31');
   await page.fill('#open-src-chase-checking', '1000'); await page.press('#open-src-chase-checking', 'Tab');
   await page.fill('#open-save_chase', '5000'); await page.press('#open-save_chase', 'Tab');
@@ -181,7 +183,7 @@ server.listen(0, async () => {
   check('a bad amount is refused with help', /Enter an amount/.test(await page.textContent('#settings-body')));
   await page.fill('#open-src-amex', '200'); await page.press('#open-src-amex', 'Tab');
   await closeSheet();
-  const cells = async code => (await page.locator('#matrix tbody tr', { hasText: code }).first().locator('td').allTextContents()).map(t => t.trim());
+  const cells = async code => (await page.locator('#fs-tb tbody tr', { hasText: code }).first().locator('td').allTextContents()).map(t => t.trim());
   const sav = await cells('Chase Savings');
   check('savings: opening $5,000, January end $5,400 (400 moved in)', sav[1] === '5,000' && sav[2] === '5,400', sav.slice(0, 4).join(' | '));
   const eq = await cells('Opening balance equity');
@@ -190,14 +192,39 @@ server.listen(0, async () => {
   check('income is a year-to-date balance', inc[2] === '(4,200)' && inc[3] === '(8,400)', inc.slice(0, 5).join(' | '));
   const diff = await cells('Difference');
   check('every balance column adds to zero', diff.slice(1, 5).every(t => t === '\u2013'), diff.slice(0, 6).join(' | '));
-  check('no more opening-balance nudge', !(await page.locator('#matrix').textContent()).includes('No opening balances yet'));
-  await page.click('#matrix >> text=Activity');
+  check('no more opening-balance nudge', !(await page.locator('#fs-tb').textContent()).includes('No opening balances yet'));
+  await page.click('#fs-tb >> text=Activity');
   const actInc = await cells('Paycheck');
   check('the Activity view still shows each month\'s movement', actInc[1] === '(4,200)' && actInc[2] === '(4,200)', actInc.slice(0, 4).join(' | '));
-  await page.click('#matrix >> text=Balances');
+  await page.click('#fs-tb >> text=Balances');
+
+  // ---------- F/S: four pages ----------
+  const pages = await page.locator('#fs-nav button').allTextContents();
+  check('F/S has four pages, in order', pages.join('|') === 'TB Summary|Balance Sheet|Income Statement|GL Detail', pages.join('|'));
+  await goFS('bs');
+  const bsRow = async name => (await page.locator('#fs-bs tbody tr', { hasText: name }).first().locator('td').allTextContents()).map(t => t.trim());
+  const num = t => Number(t.replace(/[(),]/g, ''));
+  const assets = await bsRow('Total assets'), owed = await bsRow('Total liabilities'), equity = await bsRow('Total equity'), bsDiff = await bsRow('Difference');
+  check('Balance Sheet opens with what you have: $6,000', assets[1] === '6,000', assets.slice(0, 3).join(' | '));
+  check('...what you owe: $200', owed[1] === '200', owed.slice(0, 3).join(' | '));
+  check('...and equity of $5,800', equity[1] === '5,800', equity.slice(0, 3).join(' | '));
+  check('equity grows with earnings, month by month', num(equity[2]) > 5800 && num(equity[3]) > num(equity[2]), equity.slice(1, 4).join(' | '));
+  check('assets equal liabilities plus equity in every column', bsDiff.slice(1, 5).every(t => t === '\u2013') && /Assets equal liabilities plus equity/.test(await page.locator('#fs-bs .mx-legend').textContent()), bsDiff.slice(0, 5).join(' | '));
+  await page.locator('#fs-bs button.cell').first().click();
+  check('a Balance Sheet number opens GL Detail, with a way back to the Balance Sheet', (await onGL()) && /Back to Balance Sheet/.test(await page.textContent('#gl-back')));
+  await page.click('#gl-back');
+  check('Back lands on the Balance Sheet', (await page.getAttribute('#fs-nav [data-page="bs"]', 'aria-pressed')) === 'true' && await page.locator('#fs-bs').isVisible());
+  await goFS('tb');
+  await page.locator('#fs-tb button.cell').first().click();
+  check('a TB Summary number opens GL Detail, with a way back to TB Summary', (await onGL()) && /Back to TB Summary/.test(await page.textContent('#gl-back')));
+  await page.click('#gl-back');
+  check('Back lands on TB Summary, and GL Detail is no longer filtered', (await page.getAttribute('#fs-nav [data-page="tb"]', 'aria-pressed')) === 'true' && await page.locator('#fs-tb').isVisible());
+  await goFS('gl');
+  check('opening GL Detail directly shows everything, with no Back button', (await txCount()) === n && await page.locator('#gl-back').isHidden());
+  await goFS('tb');
 
   // ---------- GL detail ----------
-  await page.click('#tab-gl');
+  await goFS('gl');
   check('GL Detail shows every transaction', (await txCount()) === n);
   const delta = glRow('DELTA AIR LINES');
   check('flight filed under the trip (7120)', (await delta.innerText()).includes('7120 Lisbon'), (await delta.innerText()).replace(/\s+/g, ' '));
@@ -218,7 +245,7 @@ server.listen(0, async () => {
   // ---------- drill down from Budget and come back ----------
   await page.click('#tab-budget');
   await page.locator('#where .catrow').first().click();
-  check('tapping a category opens GL Detail, filtered', (await page.getAttribute('#tab-gl', 'aria-selected')) === 'true' && /\d+ of 74/.test(await page.textContent('#gl-count')));
+  check('tapping a category opens GL Detail, filtered', (await onGL()) && /\d+ of 74/.test(await page.textContent('#gl-count')));
   check('there is a Back button', /Back to Budget/.test(await page.textContent('#gl-back')));
   await page.click('#gl-back');
   check('Back returns to Budget', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
@@ -233,8 +260,8 @@ server.listen(0, async () => {
   await page.locator('#tie-savings').getByRole('button', { name: 'Add', exact: true }).click();
   check('a $150 pull from savings shows on the tie-out', /\$150/.test(await page.textContent('#tie-savings')) && /Pulled out/.test(await page.textContent('#tie-savings')));
   check('and the tie-out still ties', /Ties to your checking/.test(await page.textContent('#tie .check')));
-  await page.click('#tab-tb');
-  check('the trial balance still balances after it', /Every month balances/.test(await page.locator('#matrix .mx-legend').textContent()));
+  await goFS('tb');
+  check('the trial balance still balances after it', /Every month balances/.test(await page.locator('#fs-tb .mx-legend').textContent()));
   await saved();
 
   // ---------- encrypted at rest ----------
@@ -250,7 +277,7 @@ server.listen(0, async () => {
   check('wrong passphrase rejected', await page.locator('#lock').isVisible());
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
   await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num', { timeout: 15000 });
-  await page.click('#tab-gl');
+  await goFS('gl');
   check('unlock restores every transaction, including the one logged by hand', (await txCount()) === n + 1);
   check('the hand-logged move survived and is marked', (await glRow('BY HAND').textContent()).includes('entered by hand'));
   await glRow('BY HAND').locator('text=Remove').click();
@@ -260,7 +287,7 @@ server.listen(0, async () => {
   check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon'));
   check('TB coding survived', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
   await page.click('#tab-budget'); await page.click('#plan-details summary');
-  await page.click('#tab-tb');
+  await goFS('tb');
   check('opening balances survived', (await cells('Chase Savings'))[1] === '5,000');
   await page.click('#tab-budget');
   check('plan survived', (await page.inputValue('#plan-income')) === '5000' && (await page.inputValue('#plan-save_chase')) === '500');
@@ -274,7 +301,7 @@ server.listen(0, async () => {
   await page.click('#demo-switch');
   await page.waitForFunction(() => document.getElementById('savechip').textContent === 'Dummy numbers on', null, { timeout: 15000 });
   await closeSheet();
-  await page.click('#tab-gl');
+  await goFS('gl');
   const demoText = await body();
   check('dummy mode shows made-up numbers instead', demoText.includes('HARBOR PROPERTY MANAGEMENT') && (await leaks()).length === 0, `(real markers leaked: ${(await leaks()).join(',') || 'none'})`);
   check('adding statements is off while dummy numbers show', await page.locator('#add-btn').isHidden());
@@ -301,7 +328,7 @@ server.listen(0, async () => {
   await page.fill('#demo-pass', PASS); await page.click('text=Show my data');
   await page.waitForFunction(() => document.getElementById('savechip').textContent === 'Saved on this device', null, { timeout: 15000 });
   await closeSheet();
-  await page.click('#tab-gl');
+  await goFS('gl');
   check('your own data is back, exactly as it was', (await txCount()) === n && (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
   check('and the plan edit made on dummy numbers is gone', true && (await (async () => { await page.click('#tab-budget'); return (await page.inputValue('#plan-income')) === '5000'; })()));
 
@@ -334,7 +361,7 @@ server.listen(0, async () => {
   await sec.getByRole('button', { name: 'Tap again to restore' }).click();
   await saved();
   await closeSheet();
-  await page.click('#tab-gl');
+  await goFS('gl');
   check('restore brings everything back', (await txCount()) === n && (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon') && (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
 
   // ---------- lock now ----------

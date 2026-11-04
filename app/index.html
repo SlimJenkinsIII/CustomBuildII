@@ -178,6 +178,11 @@
     svg.chart .hit-col { cursor: pointer; }
     svg.chart .hit-col:focus { outline: none; }
     svg.chart .hit-col:focus-visible { stroke: var(--ink); stroke-width: 2; }
+    .seg.fs-nav { align-self: flex-start; max-width: 100%; }
+    @media (max-width: 480px) {
+      .seg.fs-nav { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: 16px; align-self: stretch; }
+      .seg.fs-nav button { padding: 8px 6px; text-align: center; }
+    }
     .key i.dash { width: 14px; height: 2px; border-radius: 1px; background: var(--ink); opacity: .6; }
     .catdelta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .seg { flex-wrap: wrap; }
@@ -322,9 +327,8 @@
         <button class="tab" role="tab" id="tab-budget" aria-selected="true" aria-controls="panel-budget" type="button">Budget</button>
         <button class="tab" role="tab" id="tab-investments" aria-selected="false" aria-controls="panel-investments" type="button">Investments</button>
         <button class="tab" role="tab" id="tab-savings" aria-selected="false" aria-controls="panel-savings" type="button">Savings</button>
-        <button class="tab" role="tab" id="tab-tb" aria-selected="false" aria-controls="panel-tb" type="button">TB Summary</button>
+        <button class="tab" role="tab" id="tab-fs" aria-selected="false" aria-controls="panel-fs" type="button">F/S</button>
         <button class="tab" role="tab" id="tab-tie" aria-selected="false" aria-controls="panel-tie" type="button">Tie-out</button>
-        <button class="tab" role="tab" id="tab-gl" aria-selected="false" aria-controls="panel-gl" type="button">GL Detail</button>
       </div>
       <div class="notice" id="savebanner" hidden>
         <span>Your data isn't saved yet. Set a passphrase to keep it on this device.</span>
@@ -362,17 +366,23 @@
         <section class="card placeholder"><h2>Savings</h2><p>Coming later: savings accounts and goals, with progress against your plan.</p></section>
       </div>
 
-      <div class="panel" id="panel-tb" role="tabpanel" aria-labelledby="tab-tb" hidden>
-        <section class="card" id="matrix" aria-labelledby="matrix-title"></section>
-      </div>
-
       <div class="panel" id="panel-tie" role="tabpanel" aria-labelledby="tab-tie" hidden>
         <section class="card" id="tie" aria-labelledby="tie-title"></section>
         <section class="card" id="tie-plan"></section>
         <section class="card" id="tie-savings"></section>
       </div>
 
-      <div class="panel" id="panel-gl" role="tabpanel" aria-labelledby="tab-gl" hidden>
+      <div class="panel" id="panel-fs" role="tabpanel" aria-labelledby="tab-fs" hidden>
+        <div class="seg fs-nav" id="fs-nav" role="group" aria-label="Financial statements">
+          <button type="button" data-page="tb" aria-pressed="true">TB Summary</button>
+          <button type="button" data-page="bs" aria-pressed="false">Balance Sheet</button>
+          <button type="button" data-page="is" aria-pressed="false">Income Statement</button>
+          <button type="button" data-page="gl" aria-pressed="false">GL Detail</button>
+        </div>
+        <div class="panel" id="page-tb"><section class="card" id="fs-tb" aria-labelledby="fs-tb-title"></section></div>
+        <div class="panel" id="page-bs" hidden><section class="card" id="fs-bs" aria-labelledby="fs-bs-title"></section></div>
+        <div class="panel" id="page-is" hidden><section class="card" id="fs-is" aria-labelledby="fs-is-title"></section></div>
+        <div class="panel" id="page-gl" hidden>
         <section class="card" id="gl-card" aria-labelledby="gl-title">
           <div class="card-head">
             <h2 id="gl-title">GL detail</h2>
@@ -384,8 +394,10 @@
           <div class="scroll"><table id="out"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>GL account</th><th class="num">Amount</th></tr></thead><tbody></tbody></table></div>
           <div class="coverage" id="coverage"></div>
         </section>
+        </div>
       </div>
-    </div>
+
+          </div>
   </main>
 
   <div class="overlay" id="settings" hidden>

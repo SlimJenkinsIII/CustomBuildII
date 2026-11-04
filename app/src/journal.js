@@ -107,6 +107,14 @@ export const countBeforeOpening = (txs, opening) => txs.filter(t => t.date <= op
 const PNL_GROUPS = new Set(['income', 'fixed', 'subscriptions', 'onetime', 'free', 'vacation', 'other']);
 const isPnl = key => !key.startsWith('src:') && PNL_GROUPS.has(CATEGORIES[key]?.group);
 
+// Which part of the statements an account belongs to. Decided by what the account is, never by its number.
+export function sectionOf(key) {
+  if (key.startsWith('src:')) return SOURCE_ROLES[key.slice(4)] === 'liability' ? 'liability' : 'asset';
+  if (key === 'equity' || key === 'retained') return 'equity';
+  if (key === 'clearing') return 'asset';
+  return isPnl(key) ? 'pnl' : 'asset';           // savings accounts and the suspense account are things you have
+}
+
 // ---------- trial balance ----------
 // One row per account that has activity, in account-number order. Each month column is that account's
 // net movement (debits positive, credits negative). Every column adds to zero.
@@ -159,7 +167,7 @@ export function trialBalance(txs, year, asOf = '', opening = NO_OPENING) {
     const total = months.reduce((s, ym) => s + byMonth[ym], 0);
     const openBal = Number(year) >= Number(opening.date.slice(0, 4)) ? openBalance(key) : 0;
     const lastReached = [...months].reverse().find(ym => reached[ym]);
-    return { ...info, class: classOf(info.code), byMonth, total, balByMonth, openBal, change: lastReached ? balByMonth[lastReached] - openBal : 0 };
+    return { ...info, class: classOf(info.code), section: sectionOf(key), byMonth, total, balByMonth, openBal, change: lastReached ? balByMonth[lastReached] - openBal : 0 };
   }).filter(r => r.openBal !== 0 || r.total !== 0 || months.some(ym => r.byMonth[ym] !== 0 || r.balByMonth[ym] !== 0))
     .sort((a, b) => a.code.localeCompare(b.code) || a.name.localeCompare(b.name));
 
@@ -272,4 +280,34 @@ export function tieOut(txs, plan, period, asOf = '', opening = NO_OPENING) {
     vsPlan, vsPlanTotal: vsPlan.reduce((s, l) => s + l.effect, 0),
     overspend: { over, free, pulledOut, movedLess: Math.max(0, planned('savings') - savingsNet) },
   };
+}
+
+// ---------- balance sheet ----------
+// What you have, what you owe, and what is left, at the start of the year and at the end of each month.
+// Liabilities and equity are credit balances, shown as positive numbers, so the sheet reads
+// assets = liabilities + equity. Equity includes this year's earnings so far (income less spending, year to date).
+export function balanceSheet(txs, year, asOf = '', opening = NO_OPENING) {
+  const tb = trialBalance(txs, year, asOf, opening);
+  const { months, reached } = tb;
+  const sign = r => (r.section === 'asset' ? 1 : -1);
+  const make = r => ({
+    key: r.key, code: r.code, name: r.name, open: sign(r) * r.openBal,
+    byMonth: Object.fromEntries(months.map(ym => [ym, reached[ym] ? sign(r) * r.balByMonth[ym] : 0])),
+  });
+  const total = rows => ({
+    open: rows.reduce((s, r) => s + r.open, 0),
+    byMonth: Object.fromEntries(months.map(ym => [ym, rows.reduce((s, r) => s + r.byMonth[ym], 0)])),
+  });
+  const section = name => { const rows = tb.rows.filter(r => r.section === name).map(make); return { rows, ...total(rows) }; };
+
+  const assets = section('asset'), liabilities = section('liability'), equityAccounts = section('equity');
+  const earnings = { open: 0, byMonth: Object.fromEntries(months.map(ym => [ym, tb.netIncomeYtd[ym]])) };
+  const add = (a, b) => ({ open: a.open + b.open, byMonth: Object.fromEntries(months.map(ym => [ym, a.byMonth[ym] + b.byMonth[ym]])) });
+  const equity = { rows: equityAccounts.rows, earnings, ...add(equityAccounts, earnings) };
+  const liabilitiesAndEquity = add(liabilities, equity);
+  const difference = {
+    open: assets.open - liabilitiesAndEquity.open,
+    byMonth: Object.fromEntries(months.map(ym => [ym, assets.byMonth[ym] - liabilitiesAndEquity.byMonth[ym]])),
+  };
+  return { year, months, reached, partialMonth: tb.partialMonth, openDate: tb.openDate, hasOpening: tb.hasOpening, assets, liabilities, equity, liabilitiesAndEquity, difference };
 }

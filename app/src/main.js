@@ -6,7 +6,7 @@ import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, se
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
-import { trialBalance, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
+import { trialBalance, balanceSheet, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
 import { createVault, seal, unlock } from './vault.js';
 import { memoryStorage, indexedDbStorage } from './storage.js';
 import { samplePlan } from './plan.sample.js';
@@ -23,7 +23,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {},
-  txs: [], ym: null, year: null, tab: 'budget', returnTab: null, period: '4w',
+  txs: [], ym: null, year: null, tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
@@ -241,8 +241,10 @@ function drill(filter) {
   else if (filter.type === 'week') gl.week = filter.start;
   else if (filter.type === 'ask') gl.ask = true;
   state.gl = gl;
-  if (state.tab !== 'gl') state.returnTab = state.tab;
-  setTab('gl');
+  if (!(state.tab === 'fs' && state.fsPage === 'gl')) state.returnTo = { tab: state.tab, page: state.fsPage };
+  state.tab = 'fs'; state.fsPage = 'gl';
+  applyTab();
+  renderLedger();
   window.scrollTo({ top: 0 });
 }
 
@@ -309,8 +311,8 @@ function renderGlRows() {
     state.gl.ask && chip('Big dinners and drinks to ask about', () => { state.gl.ask = false; renderGlRows(); }),
     glActive() && h('button', { type: 'button', class: 'linkbtn', text: 'Clear all filters', onclick: () => { resetGl(); renderGlControls(); renderGlRows(); } }));
   const back = $('gl-back');
-  back.hidden = !state.returnTab;
-  if (state.returnTab) back.textContent = `← Back to ${TAB_LABELS[state.returnTab]}`;
+  back.hidden = !state.returnTo;
+  if (state.returnTo) back.textContent = `← Back to ${state.returnTo.tab === 'fs' ? FS_PAGES.find(p => p[0] === state.returnTo.page)[1] : TAB_LABELS[state.returnTo.tab]}`;
 
   const body = $('out').querySelector('tbody');
   body.replaceChildren();
@@ -643,12 +645,16 @@ function renderMonth(asOf, keepFocus) {
 }
 
 // ---------- trial balance and income statement (TB Summary tab) ----------
-const TB_VIEWS = [['bal', 'Balances'], ['act', 'Activity'], ['is', 'Income statement']];
+const TB_VIEWS = [['bal', 'Balances'], ['act', 'Activity']];
 const viewToggle = asOf => h('div', { class: 'seg', role: 'group', 'aria-label': 'View' },
-  TB_VIEWS.map(([id, label]) => h('button', { type: 'button', text: label, 'aria-pressed': String(state.tbView === id), onclick: () => { state.tbView = id; renderTB(asOf, false); } })));
+  TB_VIEWS.map(([id, label]) => h('button', { type: 'button', text: label, 'aria-pressed': String(state.tbView === id), onclick: () => { state.tbView = id; renderTrialBalance(asOf); } })));
 
-function renderTB(asOf, keepFocus) {
-  if (state.tbView === 'is') renderMatrix(asOf, keepFocus); else renderTrialBalance(asOf, keepFocus);
+// The three statement pages are drawn together, so a change of year shows on all of them.
+function renderFS(asOf, focusId) {
+  renderTrialBalance(asOf);
+  renderBalanceSheet(asOf);
+  renderMatrix(asOf);
+  if (focusId) $(focusId)?.focus();
 }
 
 // Where a trial-balance number leads in GL Detail.
@@ -660,7 +666,7 @@ function drillFor(row, ym) {
 
 const fmtFull = iso => dateOf(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
-function renderTrialBalance(asOf, keepFocus) {
+function renderTrialBalance(asOf) {
   const bal = state.tbView === 'bal';
   const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
   const tb = trialBalance(state.txs, state.year, asOf, state.opening);
@@ -720,10 +726,10 @@ function renderTrialBalance(asOf, keepFocus) {
     ? tb.bal.open.difference === 0 && tb.months.every(ym => !tb.reached[ym] || tb.bal.byMonth[ym].difference === 0)
     : tb.totals.differenceYtd === 0 && tb.months.every(ym => tb.totals.difference[ym] === 0);
   const before = countBeforeOpening(state.txs, state.opening);
-  const select = h('select', { id: 'year', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderTB(asOf, true); } },
+  const select = h('select', { id: 'year-tb', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-tb'); } },
     years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
-  fill($('matrix'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'matrix-title', text: bal ? 'Trial balance, month end' : 'Trial balance, monthly activity' }), h('div', { class: 'row-form' }, viewToggle(asOf), select)),
+  fill($('fs-tb'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-tb-title', text: bal ? 'Trial balance, month end' : 'Trial balance, monthly activity' }), h('div', { class: 'row-form' }, viewToggle(asOf), select)),
     h('p', { class: 'sub', text: bal
       ? `Accounts in number order. Each column is where the account stands at month end, starting from ${fmtFull(tb.openDate)}. Debits are plain numbers, credits in brackets. Income and spending start again each January; last year’s result moves to retained earnings. Whole dollars.`
       : 'Accounts in number order. Each column is that month’s movement: debits as plain numbers, credits in brackets. Whole dollars. Savings accounts show only what you moved in or out, since their own statements aren’t imported.' }),
@@ -734,7 +740,68 @@ function renderTrialBalance(asOf, keepFocus) {
     h('div', { class: 'mx-legend' },
       h('span', { class: balanced ? 'ok' : 'bad', text: balanced ? '✓ Every month balances: debits equal credits' : '✗ Out of balance: see the Difference row' }),
       h('span', { text: 'Tap a number to see that month’s transactions. Scroll sideways for more months.' })));
-  if (keepFocus) $('year').focus();
+}
+
+function renderBalanceSheet(asOf) {
+  const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
+  const bs = balanceSheet(state.txs, state.year, asOf, state.opening);
+  const shown = ym => bs.reached[ym];
+
+  const head = h('tr', {}, h('th', { class: 'acct', style: 'text-align:left', text: 'Account' }),
+    h('th', {}, 'Opening', h('small', { text: fmtFull(bs.openDate) })),
+    bs.months.map((ym, i) => h('th', {}, MONTH_ABBR[i], ym === bs.partialMonth && h('small', { text: `to the ${Number(asOf.slice(8))}th` }))));
+
+  const body = h('tbody');
+  const emptyCells = () => bs.months.map(() => h('td', { class: 'empty', text: '·' }));
+  const header = label => body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: 13 })));
+  const accountRow = r => {
+    const tr = h('tr', {}, h('td', { class: 'acct' }, r.code && h('span', { class: 'code', text: r.code }), r.name), h('td', { text: whole(r.open) }));
+    bs.months.forEach((ym, i) => {
+      if (!shown(ym)) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
+      const v = r.byMonth[ym], target = drillFor(r, ym), td = h('td');
+      if (v !== 0 && target) {
+        td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
+          'aria-label': `${r.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+      } else td.textContent = whole(v);
+      tr.append(td);
+    });
+    body.append(tr);
+  };
+  const totalRow = (label, t, cls) => {
+    const tr = h('tr', { class: cls }, h('td', { class: 'acct', text: label }), h('td', { text: whole(t.open) }));
+    for (const ym of bs.months) tr.append(shown(ym) ? h('td', { text: whole(t.byMonth[ym]) }) : h('td', { class: 'empty', text: '·' }));
+    body.append(tr);
+  };
+
+  header('Assets: what you have');
+  bs.assets.rows.forEach(accountRow);
+  totalRow('Total assets', bs.assets, 'tot');
+  if (bs.liabilities.rows.length) {
+    header('Liabilities: what you owe');
+    bs.liabilities.rows.forEach(accountRow);
+    totalRow('Total liabilities', bs.liabilities, 'tot');
+  }
+  header('Equity: what is left');
+  bs.equity.rows.forEach(accountRow);
+  const earnings = h('tr', {}, h('td', { class: 'acct', text: 'Earnings so far this year' }), h('td', { text: whole(0) }));
+  for (const ym of bs.months) earnings.append(shown(ym) ? h('td', { text: whole(bs.equity.earnings.byMonth[ym]) }) : h('td', { class: 'empty', text: '·' }));
+  body.append(earnings);
+  totalRow('Total equity', bs.equity, 'tot');
+  totalRow('Total liabilities & equity', bs.liabilitiesAndEquity, 'tot2');
+  totalRow('Difference (should be –)', bs.difference, 'net');
+
+  const balanced = bs.difference.open === 0 && bs.months.every(ym => !shown(ym) || bs.difference.byMonth[ym] === 0);
+  const select = h('select', { id: 'year-bs', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-bs'); } },
+    years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
+  fill($('fs-bs'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-bs-title', text: 'Balance sheet' }), select),
+    h('p', { class: 'sub', text: `Where you stand at the end of each month, starting from ${fmtFull(bs.openDate)}. What you owe and equity are shown as positive numbers, so assets equal liabilities plus equity. Earnings so far this year are income less spending since January. Whole dollars. Savings accounts only show what you moved in or out, since their own statements aren’t imported.` }),
+    !bs.hasOpening && h('div', { class: 'notice' }, h('span', { text: 'No opening balances yet, so every balance starts from zero. Enter what each account held on your opening date to tie to your statements.' }),
+      h('button', { class: 'btn', type: 'button', text: 'Enter opening balances', onclick: () => openSettings('opening') })),
+    h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
+    h('div', { class: 'mx-legend' },
+      h('span', { class: balanced ? 'ok' : 'bad', text: balanced ? '✓ Assets equal liabilities plus equity in every column' : '✗ Out of balance: see the Difference row' }),
+      h('span', { text: 'Tap a number to see that month’s transactions. Scroll sideways for more months.' })));
 }
 
 // ---------- tie-out: where did the cash go? ----------
@@ -850,7 +917,7 @@ const whole = c => {
   return c < 0 ? `(${txt})` : txt;
 };
 
-function renderMatrix(asOf, keepFocus) {
+function renderMatrix(asOf) {
   const years = [...new Set(state.txs.map(t => t.date.slice(0, 4)))].sort().reverse();
   const m = monthlyMatrix(state.txs, state.year, asOf);
   const isPartial = ym => ym === m.partialMonth;
@@ -888,23 +955,24 @@ function renderMatrix(asOf, keepFocus) {
     body.append(tr);
   }
 
-  const select = h('select', { id: 'year', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderTB(asOf, true); } },
+  const select = h('select', { id: 'year-is', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-is'); } },
     years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
-  fill($('matrix'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'matrix-title', text: 'Income statement by month' }), h('div', { class: 'row-form' }, viewToggle(asOf), select)),
+  fill($('fs-is'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-is-title', text: 'Income statement' }), select),
     h('p', { class: 'sub', text: 'Whole dollars. Down to Net operating income, money spent shows as a positive number. Below it, brackets reduce net income, so each total adds up. Transfers between your own accounts are left out.' }),
     h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
     h('div', { class: 'mx-legend' },
       m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-watch)' }), 'Well above that line\u2019s monthly average'),
       m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-good)' }), 'Well below it'),
       h('span', { text: 'Tap a number to see its transactions. Scroll sideways for more months.' })));
-  if (keepFocus) $('year').focus();
 }
 
 // ---------- tabs and the main render ----------
-const TABS = ['summary', 'budget', 'investments', 'savings', 'tb', 'tie', 'gl'];
-const TAB_LABELS = { summary: 'Summary', budget: 'Budget', investments: 'Investments', savings: 'Savings', tb: 'TB Summary', tie: 'Tie-out', gl: 'GL Detail' };
-const NEEDS_DATA = new Set(['budget', 'tb', 'tie', 'gl']); // the other tabs are placeholders for now
+const TABS = ['summary', 'budget', 'investments', 'savings', 'fs', 'tie'];
+const TAB_LABELS = { summary: 'Summary', budget: 'Budget', investments: 'Investments', savings: 'Savings', fs: 'F/S', tie: 'Tie-out' };
+const NEEDS_DATA = new Set(['budget', 'fs', 'tie']); // the other tabs are placeholders for now
+// The pages inside F/S, in the order you read them.
+const FS_PAGES = [['tb', 'TB Summary'], ['bs', 'Balance Sheet'], ['is', 'Income Statement'], ['gl', 'GL Detail']];
 
 function applyTab() {
   const has = state.txs.length > 0;
@@ -912,19 +980,35 @@ function applyTab() {
     $(`tab-${name}`).setAttribute('aria-selected', String(state.tab === name));
     $(`panel-${name}`).hidden = state.tab !== name || (NEEDS_DATA.has(name) && !has);
   }
+  for (const [id] of FS_PAGES) $(`page-${id}`).hidden = state.fsPage !== id;
+  for (const b of document.querySelectorAll('#fs-nav button')) b.setAttribute('aria-pressed', String(b.dataset.page === state.fsPage));
   $('empty').hidden = has || !NEEDS_DATA.has(state.tab);
 }
 
 function setTab(tab) {
   state.tab = tab;
-  if (tab !== 'gl') state.returnTab = null;
-  if (tab === 'gl' && state.txs.length) renderLedger();
+  if (!(tab === 'fs' && state.fsPage === 'gl')) state.returnTo = null;
+  if (tab === 'fs' && state.fsPage === 'gl' && state.txs.length) renderLedger();
   if (tab === 'budget' && state.txs.length) renderBudget(asOfDate(state.txs), false);   // redraw the charts at this screen's width
   applyTab();
 }
 for (const name of TABS) $(`tab-${name}`).addEventListener('click', () => setTab(name));
-// Coming back from a drill-down also drops its filter, so GL Detail isn't left showing one slice later.
-$('gl-back').addEventListener('click', () => { const back = state.returnTab; state.returnTab = null; resetGl(); setTab(back ?? 'budget'); });
+
+function setFsPage(page) {
+  state.fsPage = page;
+  if (page !== 'gl') state.returnTo = null;
+  if (page === 'gl' && state.txs.length) renderLedger();
+  applyTab();
+}
+for (const b of document.querySelectorAll('#fs-nav button')) b.addEventListener('click', () => setFsPage(b.dataset.page));
+
+// Coming back from a drill-down returns to the page you came from, and drops its filter so GL Detail isn't left showing one slice.
+$('gl-back').addEventListener('click', () => {
+  const back = state.returnTo;
+  state.returnTo = null; resetGl();
+  if (back?.tab === 'fs') state.fsPage = back.page;
+  setTab(back?.tab ?? 'budget');
+});
 $('empty-settings').addEventListener('click', () => openSettings('saving'));
 $('banner-btn').addEventListener('click', () => { openSettings('saving'); $('sec-pass')?.focus(); });
 
@@ -934,7 +1018,7 @@ function render() {
   $('app').hidden = state.locked;
   $('add-btn').hidden = state.locked || state.demo;
   if (state.locked) {
-    for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'matrix', 'plan-body', 'chips', 'gl-controls', 'coverage']) $(id).replaceChildren();
+    for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'fs-tb', 'fs-bs', 'fs-is', 'plan-body', 'chips', 'gl-controls', 'coverage']) $(id).replaceChildren();
     $('out').querySelector('tbody').replaceChildren();
     $('gl-count').textContent = '';
     $('settings-body').replaceChildren();
@@ -950,7 +1034,7 @@ function render() {
     $('asof').textContent = `Through ${fmtDate(asOf)}.` + (sample && !state.demo ? ' Using a sample plan until you set your own under Your plan.' : '');
     renderBudget(asOf, false);
     renderLedger();
-    renderTB(asOf, false);
+    renderFS(asOf);
     renderTie();
   }
   if (!document.activeElement?.closest('#plan-body')) renderPlan();   // don't rebuild the form while you type in it

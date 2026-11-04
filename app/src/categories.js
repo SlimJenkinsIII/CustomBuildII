@@ -165,6 +165,10 @@ export function selectableCategories(trips = []) {
 // differences are saved. Source accounts (the banks and cards) are keyed "src:<account>".
 const DEFAULT_CODES = Object.fromEntries(Object.values(CATEGORIES).map(x => [x.id, x.code]));
 const DEFAULT_SOURCE_CODES = Object.fromEntries(Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => [`src:${k}`, v.code]));
+const DEFAULT_NAMES = Object.fromEntries([
+  ...Object.values(CATEGORIES).map(x => [x.id, x.name]),
+  ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => [`src:${k}`, v.name]),
+]);
 export const defaultCode = key => (key.startsWith('src:') ? DEFAULT_SOURCE_CODES[key] : DEFAULT_CODES[key]);
 
 // Every account that holds a number, with the number it would have under a given coding.
@@ -175,6 +179,93 @@ function accountsWith(coding) {
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, name: p.name, code: p.code })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, name: a.name, code: a.code })),
   ];
+}
+
+// ---------- your own names and sub accounts ----------
+// Names: any account except trips (rename the trip), system accounts and Needs review can be renamed. Only the changes are saved.
+// Sub accounts: you add one under any account and it takes the next free number below its parent
+// (under 1100: 1110, 1120, ...; under 5110: 5111, 5112, ...). It files and reports like its parent.
+const NO_RENAME = new Set(['transfer', 'review']);
+export const canRename = key => key in DEFAULT_NAMES && !NO_RENAME.has(key) && CATEGORIES[key]?.group !== 'vacation';
+const canParent = key => !!CATEGORIES[key] && !!DEFAULT_CODES[key] && !['vacation', 'system'].includes(CATEGORIES[key].group);
+
+export function cleanNames(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [key, name] of Object.entries(raw)) {
+    const n = typeof name === 'string' ? name.trim().slice(0, 60) : '';
+    if (canRename(key) && n && n !== DEFAULT_NAMES[key]) out[key] = n;
+  }
+  return out;
+}
+
+export function setName(names, key, name) {
+  if (!canRename(key)) throw new Error('That account cannot be renamed here.');
+  name = String(name).trim();
+  if (!name) throw new Error('Type a name.');
+  if (name.length > 60) throw new Error('Keep the name under 60 characters.');
+  const next = { ...names };
+  if (name === DEFAULT_NAMES[key]) delete next[key]; else next[key] = name;
+  return next;
+}
+
+export function applyNames(names = {}) {
+  for (const x of Object.values(CATEGORIES)) if (canRename(x.id)) x.name = names[x.id] ?? DEFAULT_NAMES[x.id];
+  for (const [k, v] of Object.entries(SOURCE_ACCOUNTS)) v.name = names[`src:${k}`] ?? DEFAULT_NAMES[`src:${k}`];
+}
+
+// Customs are [{ id, parent, code, name }]. They become ordinary categories, so every screen treats them like the built-in ones.
+export function cleanCustoms(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [], ids = new Set(), codes = new Set();
+  for (const x of raw) {
+    if (!x || !/^sub_[a-z0-9]{1,12}$/.test(x.id) || ids.has(x.id) || !/^\d{4}$/.test(String(x.code)) || codes.has(String(x.code))) continue;
+    const parentOk = ids.has(x.parent) || (CATEGORIES[x.parent] && !CATEGORIES[x.parent].custom && canParent(x.parent));
+    const name = typeof x.name === 'string' ? x.name.trim().slice(0, 60) : '';
+    if (!parentOk || !name) continue;
+    ids.add(x.id); codes.add(String(x.code));
+    out.push({ id: x.id, parent: x.parent, code: String(x.code), name });
+  }
+  return out;
+}
+
+export function applyCustoms(customs = []) {
+  for (const x of Object.values(CATEGORIES)) if (x.custom) { delete CATEGORIES[x.id]; delete DEFAULT_CODES[x.id]; delete DEFAULT_NAMES[x.id]; }
+  for (const x of customs) {
+    CATEGORIES[x.id] = { id: x.id, group: CATEGORIES[x.parent].group, code: x.code, name: x.name, custom: true, parent: x.parent };
+    DEFAULT_CODES[x.id] = x.code; DEFAULT_NAMES[x.id] = x.name;
+  }
+}
+
+// The next free number below a parent: under a number ending 00, steps of 10 first (1110, 1120, ...) and then
+// steps of 1 once those are taken (1101, 1102, ...); under a number ending 0, steps of 1 (5111, 5112, ...).
+export function nextSubCode(parentCode, used) {
+  const n = Number(parentCode);
+  const tens = n % 100 === 0 ? [10, 20, 30, 40, 50, 60, 70, 80, 90] : [];
+  const ones = n % 10 === 0 ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : [];
+  if (!tens.length && !ones.length) throw new Error(`${parentCode} has no room for sub accounts. Its number would need to end in 0.`);
+  const free = [...tens, ...ones].map(k => String(n + k)).find(code => !used.has(code));
+  if (!free) throw new Error(`${parentCode} has no free numbers left below it. Renumber something to make room.`);
+  return free;
+}
+
+// Returns { customs, id, code } with one sub account added, or throws a plain-English reason.
+export function addSub(customs, coding, parentKey, name) {
+  if (!canParent(parentKey)) throw new Error('Choose an account to add the sub account under.');
+  name = String(name).trim();
+  if (!name) throw new Error('Type a name for the sub account.');
+  if (name.length > 60) throw new Error('Keep the name under 60 characters.');
+  const used = new Set(accountsWith(coding).map(a => a.code));
+  const code = nextSubCode(coding[parentKey] ?? DEFAULT_CODES[parentKey], used);
+  const id = `sub_${(Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-10)}`;
+  return { customs: [...customs, { id, parent: parentKey, code, name }], id, code };
+}
+
+// Removes a sub account and any sub accounts under it. Returns the new list and the ids removed.
+export function removeSub(customs, id) {
+  const gone = new Set([id]);
+  for (let grew = true; grew;) { grew = false; for (const x of customs) if (!gone.has(x.id) && gone.has(x.parent)) { gone.add(x.id); grew = true; } }
+  return { customs: customs.filter(x => !gone.has(x.id)), removed: [...gone] };
 }
 
 // Keeps only entries that name a real account and hold a 4-digit number.
@@ -206,14 +297,14 @@ export function applyCoding(coding = {}) {
 }
 
 // The list shown on the TB coding screen: every account you can see, in number order.
-export function codingList(trips = [], coding = {}) {
+export function codingList(trips = [], coding = {}, names = {}) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
   const rows = [
     ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && (x.group !== 'vacation' || open.has(x.slot)))
-      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: 'Active', editable: true })),
-    ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true })),
+      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), canAddSub: canParent(x.id), custom: !!x.custom })),
+    ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, code: a.code, name: a.name, status: 'Active', editable: false })),
   ];
-  return rows.map(r => ({ ...r, class: classOf(r.code), changed: r.key in coding })).sort((a, b) => a.code.localeCompare(b.code));
+  return rows.map(r => ({ ...r, class: classOf(r.code), changed: r.key in coding, renamed: r.key in names })).sort((a, b) => a.code.localeCompare(b.code));
 }

@@ -159,7 +159,15 @@ server.listen(0, async () => {
   check('refused number snaps back', (await page.inputValue('#code-free_coffee')) === '5410');
   await page.fill('#code-free_gifts', '12'); await page.press('#code-free_gifts', 'Tab');
   check('non-4-digit number refused', /4-digit/.test(await page.textContent('#settings-body')));
+  // rename, and add a sub account under 1100 Investment account (1110 Crypto and 1120 Venmo are taken, so it lands on 1130)
+  await page.fill('#name-free_coffee', 'Cafes'); await page.press('#name-free_coffee', 'Tab');
+  check('an account can be renamed', (await page.inputValue('#name-free_coffee')) === 'Cafes');
+  await page.selectOption('#sub-parent', 'save_invest');
+  await page.fill('#sub-name', 'Roth IRA'); await page.click('text=Add sub account');
+  check('a sub account appears under its parent with the next free number', /Added 1130 Roth IRA/.test(await page.textContent('#settings-body')) && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
   await closeSheet();
+  await goFS('tb');
+  check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
   await goFS('tb');
   check('TB Summary follows the new number', (await page.locator('#fs-tb').textContent()).includes('5455'));
   const codes = await page.locator('#fs-tb tbody tr:not(.hdr):not(.tot):not(.tot2):not(.net):not(.run) .code').allTextContents();
@@ -301,6 +309,9 @@ server.listen(0, async () => {
   check('category choice survived', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
   check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon'));
   check('TB coding survived', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
+  await gear('TB coding');
+  check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
+  await closeSheet();
   await page.click('#tab-budget'); await page.click('#plan-details summary');
   await goFS('tb');
   check('opening balances survived', (await cells('Chase Savings'))[1] === '5,000');

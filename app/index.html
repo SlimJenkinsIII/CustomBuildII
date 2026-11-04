@@ -220,9 +220,15 @@
     .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: transform .15s; }
     .switch[aria-checked="true"] { background: var(--blue); }
     .switch[aria-checked="true"]::after { transform: translateX(20px); }
-    .code-row { display: grid; grid-template-columns: 74px 1fr auto; gap: 8px 10px; align-items: center; padding: 3px 0; font-size: 14px; }
+    .code-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; padding: 3px 0; font-size: 14px; }
     .code-row input { width: 74px; text-align: center; font-variant-numeric: tabular-nums; padding: 6px 4px; }
     .code-row input.changed { border-color: var(--blue); }
+    .code-row input.name { width: 100%; text-align: left; font-weight: 500; padding: 6px 8px; box-sizing: border-box; }
+    .code-row.sub { padding-left: 14px; }
+    .code-row .row-actions { display: inline-flex; gap: 6px; align-items: center; }
+    .btn.small { font-size: 12px; padding: 4px 8px; }
+    .sub-add { margin: 10px 0 6px; }
+    .sub-add input { flex: 1 1 140px; min-width: 0; }
     .code-row .code.fixed { text-align: center; margin: 0; }
     .savechip.demo { background: var(--tint-good); border-color: transparent; color: var(--ink); }
 

@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -22,7 +22,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {},
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [],
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -63,6 +63,8 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter(Boole
 
 // ---------- data ----------
 function recompute() {
+  applyCustoms(state.customs);
+  applyNames(state.names);
   applyCoding(state.coding);
   applyTripNames(state.trips);
   const auto = assignTrips(categorize(matchTransfers(state.raw)), state.trips);
@@ -104,19 +106,22 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
   state.overrides = d.overrides && typeof d.overrides === 'object' ? d.overrides : {};
   state.trips = Array.isArray(d.trips) ? d.trips : [];
+  state.customs = cleanCustoms(d.customs);
+  applyCustoms(state.customs);
+  state.names = cleanNames(d.names);
   state.coding = cleanCoding(d.coding);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1339,40 +1344,82 @@ function renderOpeningScreen(body) {
 
 function renderCodingScreen(body) {
   const msg = h('p', { class: 'msg', role: 'status' });
+  const refresh = focusId => { recompute(); render(); markDirty(); renderSettingsScreen(); if (focusId) document.getElementById(focusId)?.focus(); };
   const change = (key, value, input) => {
     try {
       state.coding = setCode(state.coding, key, value);
-      applyCoding(state.coding);
-      recompute(); render(); markDirty();
-      renderSettingsScreen();
-      document.getElementById(`code-${key}`)?.focus();
+      refresh(`code-${key}`);
     } catch (err) {
-      input.value = codingList(state.trips, state.coding).find(r => r.key === key).code;
+      input.value = codingList(state.trips, state.coding, state.names).find(r => r.key === key).code;
       input.classList.add('bad');
       msg.className = 'msg error'; msg.textContent = err.message;
     }
   };
-  const list = codingList(state.trips, state.coding);
+  const rename = (key, value, input) => {
+    try {
+      state.names = setName(state.names, key, value);
+      refresh(`name-${key}`);
+    } catch (err) {
+      input.value = codingList(state.trips, state.coding, state.names).find(r => r.key === key).name;
+      input.classList.add('bad');
+      msg.className = 'msg error'; msg.textContent = err.message;
+    }
+  };
+  const list = codingList(state.trips, state.coding, state.names);
+
+  // Add a sub account: it takes the next free number below the account you pick.
+  const parents = list.filter(r => r.canAddSub);
+  const parentSel = h('select', { id: 'sub-parent', 'aria-label': 'Add under' },
+    parents.map(r => h('option', { value: r.key, text: `${r.code} ${r.name}` })));
+  const subName = h('input', { id: 'sub-name', type: 'text', maxlength: '60', placeholder: 'Sub account name', 'aria-label': 'Sub account name' });
+  const addIt = () => {
+    try {
+      const out = addSub(state.customs, state.coding, parentSel.value, subName.value);
+      state.customs = out.customs;
+      recompute(); render(); markDirty(); renderSettingsScreen();
+      const m = document.querySelector('#settings-body .msg');
+      if (m) { m.className = 'msg'; m.textContent = `Added ${out.code} ${subName.value.trim()}.`; }
+      document.getElementById('sub-name')?.focus();
+    } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+  };
+  subName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
+
   const rows = [];
   for (const cls of [...new Set(list.map(r => r.class))]) {
     rows.push(h('h3', { class: 'set-h', text: cls }));
     for (const r of list.filter(x => x.class === cls)) {
-      rows.push(h('div', { class: 'code-row' },
+      rows.push(h('div', { class: 'code-row' + (r.custom ? ' sub' : '') },
         r.editable
           ? h('input', { id: `code-${r.key}`, type: 'text', inputmode: 'numeric', maxlength: '4', value: r.code, class: r.changed ? 'changed' : '',
               'aria-label': `TB number for ${r.name}`, onchange: e => change(r.key, e.target.value, e.target) })
           : h('span', { class: 'code fixed', text: r.code }),
-        h('span', { text: r.name }),
-        h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status })));
+        r.renamable
+          ? h('input', { id: `name-${r.key}`, type: 'text', maxlength: '60', value: r.name, class: 'name' + (r.renamed ? ' changed' : ''),
+              'aria-label': `Name of account ${r.code}`, onchange: e => rename(r.key, e.target.value, e.target) })
+          : h('span', { text: r.name }),
+        h('span', { class: 'row-actions' },
+          r.canAddSub && h('button', { type: 'button', class: 'btn ghost small', text: '+ Sub', 'aria-label': `Add a sub account under ${r.code} ${r.name}`,
+            onclick: () => { parentSel.value = r.key; subName.focus(); subName.scrollIntoView({ block: 'center' }); } }),
+          r.custom
+            ? twoStep('Remove', 'Tap again', () => {
+                const out = removeSub(state.customs, r.key);
+                state.customs = out.customs;
+                for (const [tid, cat] of Object.entries(state.overrides)) if (out.removed.includes(cat)) delete state.overrides[tid];
+                refresh();
+              }, 'btn ghost danger small')
+            : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status }))));
     }
   }
   body.append(
-    h('p', { class: 'sub', text: 'Each account has a TB number. Change one and every screen follows, including the order of the TB Summary. Numbers are 4 digits and each is used once. Planned accounts are reserved for later phases.' }),
-    msg, h('div', {}, rows),
+    h('p', { class: 'sub', text: 'Rename any account or change its number. Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112.' }),
+    msg,
+    h('div', { class: 'row-form sub-add' }, parentSel, subName, h('button', { type: 'button', class: 'btn', text: 'Add sub account', onclick: addIt })),
+    h('div', {}, rows),
     h('div', { class: 'row-form', style: 'margin-top:12px' },
-      twoStep('Reset all numbers to the defaults', 'Tap again to reset', () => {
-        state.coding = {}; applyCoding({}); recompute(); render(); markDirty(); renderSettingsScreen();
-      })));
+      twoStep('Reset numbers and names to the defaults', 'Tap again to reset', () => {
+        state.coding = {}; state.names = {}; refresh();
+      })),
+    state.customs.length > 0 && h('p', { class: 'note', text: 'Removing a sub account sends anything filed under it back to automatic categories.' }));
 }
 
 function renderTripsScreen(body) {

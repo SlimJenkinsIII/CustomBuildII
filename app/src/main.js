@@ -2,9 +2,9 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
-import { asOfDate, categoryBreakdown, monthPace, topPurchases, diningOut, habits, attention, coverage, monthlyMatrix } from './insights.js';
+import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
 import { trialBalance, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
 import { createVault, seal, unlock } from './vault.js';
@@ -23,8 +23,8 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {},
-  txs: [], ym: null, year: null, tab: 'budget', returnTab: null,
-  gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '' },
+  txs: [], ym: null, year: null, tab: 'budget', returnTab: null, period: '4w',
+  gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
   demo: false, demoAsk: false, stash: null, settingsScreen: 'home',
@@ -71,7 +71,7 @@ function recompute() {
     return pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
   }).sort((a, b) => a.date.localeCompare(b.date));
   const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort();
-  if (!months.includes(state.ym)) state.ym = months[months.length - 1] ?? null;
+  if (!months.includes(state.ym)) state.ym = defaultMonth(state.txs);
   const years = [...new Set(months.map(m => m.slice(0, 4)))];
   if (!years.includes(state.year)) state.year = years[years.length - 1] ?? null;
 }
@@ -231,12 +231,12 @@ function twoStep(label, confirmLabel, action, cls = 'btn ghost danger') {
 // ---------- GL detail ----------
 // The full ledger. Tapping a number or bar anywhere else opens this tab, narrowed to what you tapped,
 // with a Back button to return.
-const emptyGl = () => ({ cat: '', ym: '', q: '', week: '', ask: false, acct: '' });
+const emptyGl = () => ({ cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' });
 const resetGl = () => { state.gl = emptyGl(); };
 
 function drill(filter) {
   const gl = emptyGl();
-  if (filter.type === 'category') { gl.cat = filter.id; gl.ym = filter.ym ?? ''; }
+  if (filter.type === 'category') { gl.cat = filter.id; gl.ym = filter.ym ?? ''; gl.from = filter.from ?? ''; gl.to = filter.to ?? ''; }
   else if (filter.type === 'source') { gl.acct = filter.account; gl.ym = filter.ym ?? ''; }
   else if (filter.type === 'week') gl.week = filter.start;
   else if (filter.type === 'ask') gl.ask = true;
@@ -246,12 +246,14 @@ function drill(filter) {
   window.scrollTo({ top: 0 });
 }
 
-const glActive = () => { const g = state.gl; return !!(g.cat || g.acct || g.ym || g.q.trim() || g.week || g.ask); };
+const glActive = () => { const g = state.gl; return !!(g.cat || g.acct || g.ym || g.from || g.to || g.q.trim() || g.week || g.ask); };
 
 function visibleTxs() {
   const g = state.gl;
   let list = state.txs;
   if (g.cat) list = list.filter(t => t.category === g.cat);
+  if (g.from) list = list.filter(t => t.date >= g.from);
+  if (g.to) list = list.filter(t => t.date <= g.to);
   if (g.acct) list = list.filter(t => t.account === g.acct);
   if (g.ym) list = list.filter(t => monthOf(t.date) === g.ym);
   if (g.week) list = list.filter(t => t.date >= g.week && t.date <= addDays(g.week, 6));
@@ -301,6 +303,7 @@ function renderGlRows() {
   const chip = (label, onclear) => h('span', { class: 'chip' }, label,
     h('button', { type: 'button', 'aria-label': `Remove filter: ${label}`, text: '×', onclick: onclear }));
   fill($('chips'),
+    (state.gl.from && state.gl.to) && chip(`${fmtDate(state.gl.from)} to ${fmtDate(state.gl.to)}`, () => { state.gl.from = ''; state.gl.to = ''; renderGlRows(); }),
     state.gl.acct && chip(`Account: ${sourceLabel(state.gl.acct)}`, () => { state.gl.acct = ''; renderGlRows(); }),
     state.gl.week && chip(`Week of ${fmtDate(state.gl.week)}`, () => { state.gl.week = ''; renderGlRows(); }),
     state.gl.ask && chip('Big dinners and drinks to ask about', () => { state.gl.ask = false; renderGlRows(); }),
@@ -330,32 +333,80 @@ function renderGlRows() {
 
 function renderLedger() { renderGlControls(); renderGlRows(); }
 
-// ---------- sections ----------
-function renderHero(asOf) {
-  const weekStart = startOfWeek(asOf);
-  const wk = weekSummary(state.txs, plan, weekStart);
-  const day = daysBetween(weekStart, asOf) + 1;
-  const left = wk.target - wk.spent;
-  const pct = wk.target > 0 ? Math.min(100, Math.max(0, wk.spent / wk.target * 100)) : 100;
-  const paceDiff = Math.round(wk.target * day / 7) - wk.spent;
-  const over = left < 0;
-  fill($('hero'),
-    h('div', { class: 'card-head' },
-      h('h2', { id: 'hero-title', text: 'This week' }),
-      h('span', { class: 'sub', text: `${fmtDate(weekStart)} to ${fmtDate(addDays(weekStart, 6))} · day ${day} of 7` })),
-    h('div', { class: 'hero-num' }, money(left), h('small', { text: over ? 'over' : 'left to spend' })),
-    h('div', { class: 'meter' + (over ? ' over' : ''), role: 'img', 'aria-label': `Spent ${money(wk.spent)} of ${money(wk.target)}` },
-      h('div', { class: 'fill', style: `width:${pct}%` }),
-      h('div', { class: 'tick', style: `left:${day / 7 * 100}%` })),
-    h('div', { class: 'legend-row' },
-      h('span', { text: `Spent ${money(wk.spent)} of your ${money(wk.target)} weekly free cash` }),
-      h('span', { class: 'key' }, h('i', { class: 'tick' }), 'Even pace for today'),
-      h('button', { type: 'button', class: 'linkbtn', style: 'padding:0', text: 'Edit plan', onclick: openPlan })),
-    h('p', { text: paceDiff >= 0
-      ? `You're ${money(paceDiff)} under pace so far. Whatever you don't spend goes to savings.`
-      : `You're ${money(paceDiff)} over pace so far. It comes out of savings unless the rest of the week runs lighter.` }));
+// ---------- Budget tab: looking back ----------
+// Backward-looking on purpose: you add statements in batches, so "this week" is rarely a full week. Everything
+// here is built from full Sunday-to-Saturday weeks, over a period you choose.
+const PERIODS = [['4w', '4 wks', 'Last 4 weeks'], ['8w', '8 wks', 'Last 8 weeks'], ['12w', '12 wks', 'Last 12 weeks'], ['ytd', 'YTD', 'Year to date']];
+const periodLabel = k => PERIODS.find(p => p[0] === k)[2];
+const rangeText = (from, to) => `${fmtDate(from)} to ${fmtDate(to)}`;
+
+function budgetData() {
+  const all = weeklyRunning(state.txs, plan);
+  const complete = completeWeeks(all);
+  const { rows, prev } = periodWindow(complete, state.period);
+  const totals = periodTotals(rows);
+  const prevTotals = prev.length ? periodTotals(prev) : null;
+  return { all, complete, rows, prev, totals, prevTotals, compare: compareTotals(totals, prevTotals) };
 }
 
+function renderBudget(asOf, keepFocus) {
+  const d = budgetData();
+  renderBudgetSummary(d, asOf);
+  renderWeeks(d);
+  renderSavingsImpact(d);
+  renderWhere(d);
+  renderHabits(d);
+  renderMonth(asOf, keepFocus);
+}
+
+function meter(spent, target, label) {
+  const over = spent > target;
+  const pct = target > 0 ? Math.min(100, Math.max(0, spent / target * 100)) : 100;
+  return h('div', { class: 'meter' + (over ? ' over' : ''), role: 'img', 'aria-label': label },
+    h('div', { class: 'fill', style: `width:${pct}%` }));
+}
+
+function renderBudgetSummary(d, asOf) {
+  const t = d.totals;
+  const toggle = h('div', { class: 'seg', role: 'group', 'aria-label': 'Time period' }, PERIODS.map(([k, short, long]) =>
+    h('button', { type: 'button', text: short, 'aria-label': long, 'aria-pressed': String(state.period === k),
+      onclick: () => { state.period = k; renderBudget(asOf, false); } })));
+
+  // a week still in progress, after the last full one, is left out of the numbers but not hidden
+  const lastFull = d.complete[d.complete.length - 1];
+  const tail = [...d.all].reverse().find(r => r.partial && (!lastFull || r.weekStart > lastFull.weekStart));
+  const stale = staleAccounts(state.txs);
+  const notes = [
+    tail && `Not counted: ${rangeText(tail.weekStart, asOf)}, a week still in progress (${money(tail.spent)} of free cash spent so far).`,
+    stale.length && `${stale.map(a => SOURCE_ACCOUNTS[a.account]?.name ?? a.account).join(' and ')} ${stale.length === 1 ? 'data ends' : 'data end'} ${fmtDate(stale[0].to)}, a few days before the rest, so the latest week can look lighter than it was.`,
+  ].filter(Boolean).map(text => h('p', { class: 'note', text }));
+
+  if (!t.weeks) {
+    fill($('bgt-summary'),
+      h('div', { class: 'card-head' }, h('h2', { id: 'bgt-title', text: 'How you did' }), toggle),
+      h('p', { text: 'No full week to look back on yet. A week runs Sunday to Saturday, and your first one hasn’t finished.' }),
+      notes);
+    return;
+  }
+  const c = d.compare;
+  const vsBefore = !c ? null
+    : c.spentDelta === 0 ? `Spending is the same as the ${plural(t.weeks, 'week', 'weeks')} before.`
+    : `Compared with the ${plural(t.weeks, 'week', 'weeks')} before, spending is ${c.spentDelta < 0 ? 'down' : 'up'} ${money(c.spentDelta)}${c.pct == null ? '' : ` (${Math.abs(Math.round(c.pct * 100))}%)`}.`;
+
+  fill($('bgt-summary'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'bgt-title', text: periodLabel(state.period) }), toggle),
+    h('p', { class: 'sub', text: `${rangeText(t.from, t.to)} · ${plural(t.weeks, 'full week', 'full weeks')}` }),
+    h('div', { class: 'hero-num' }, signed(t.effect), h('small', { text: t.effect >= 0 ? 'added to savings' : 'pulled from savings' })),
+    meter(t.spent, t.target, `Spent ${money(t.spent)} of ${money(t.target)}`),
+    h('div', { class: 'legend-row' },
+      h('span', { text: `Spent ${money(t.spent)} of ${money(t.target)} in free cash` }),
+      h('button', { type: 'button', class: 'linkbtn', id: 'edit-plan', style: 'padding:0', text: 'Edit plan', onclick: openPlan })),
+    h('p', { text: `${t.under} of ${plural(t.weeks, 'week', 'weeks')} came in under target. An average week was ${money(t.avgSpent)}, against a ${money(t.avgTarget)} target.` }),
+    vsBefore && h('p', { text: vsBefore }),
+    notes);
+}
+
+// ----- charts -----
 function barPath(x, y0, y1, w, r) {
   const rad = Math.min(r, Math.abs(y1 - y0), w / 2);
   const up = y1 < y0;
@@ -364,54 +415,59 @@ function barPath(x, y0, y1, w, r) {
     : `M${x},${y0} V${y1 - rad} Q${x},${y1} ${x + rad},${y1} H${x + w - rad} Q${x + w},${y1} ${x + w},${y1 - rad} V${y0} Z`;
 }
 
-function weeklyChart(rows) {
-  const measured = $('trend').clientWidth - 38; // card width minus its padding and border
-  const W = measured > 200 ? Math.round(measured) : 640, H = 216, padL = 8, padR = 8, padT = 24, padB = 44;
-  const plotH = H - padT - padB;
-  const max = Math.max(0, ...rows.map(r => r.effect));
-  const min = Math.min(0, ...rows.map(r => r.effect));
-  const span = max - min || 1;
-  const y = v => padT + (max - v) / span * plotH;
-  const slot = (W - padL - padR) / rows.length;
-  const bw = Math.min(24, slot * 0.6);
-  const labelIdx = new Set([rows.length - 1]);
-  let best = 0, worst = 0;
-  rows.forEach((r, i) => { if (r.effect > rows[best].effect) best = i; if (r.effect < rows[worst].effect) worst = i; });
-  labelIdx.add(best); labelIdx.add(worst);
-  const everyOther = rows.length > 8;
+// One tooltip per chart. It follows hover and keyboard focus and is never the only way to see a number.
+function chartTip(wrap) {
+  const tip = h('div', { class: 'tip', hidden: true, role: 'presentation' });
+  return {
+    tip,
+    hide: () => { tip.hidden = true; },
+    show(anchor, lines) {
+      const r = anchor.getBoundingClientRect(), box = wrap.getBoundingClientRect();
+      fill(tip, h('b', { text: lines[0] }), ...lines.slice(1).flatMap(l => [h('br'), h('span', { text: l })]));
+      tip.hidden = false;
+      tip.style.left = `${Math.min(Math.max(r.left + r.width / 2 - box.left, 90), box.width - 90)}px`;
+      tip.style.top = `${r.top - box.top - 8}px`;
+    },
+  };
+}
+const chartWidth = id => { const w = $(id).clientWidth - 38; return w > 200 ? Math.round(w) : 640; };   // card width less its padding and border
+
+function weeksChart(rows) {
+  const W = chartWidth('bgt-weeks'), H = 230, padL = 8, padR = 8, padT = 28, padB = 30;
+  const maxV = Math.max(...rows.map(r => Math.max(r.spent, r.target))) * 1.1 || 1;
+  const y = v => padT + (1 - v / maxV) * (H - padT - padB);
+  const slot = (W - padL - padR) / rows.length, bw = Math.min(24, slot * 0.6);
+  let lo = 0, hi = 0;
+  rows.forEach((r, i) => { if (r.spent < rows[lo].spent) lo = i; if (r.spent > rows[hi].spent) hi = i; });
+  const labelAll = rows.length <= 8, everyOther = rows.length > 8;
 
   const wrap = h('div', { class: 'chart-wrap' });
-  const tip = h('div', { class: 'tip', hidden: true, role: 'presentation' });
-  const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': 'Effect on savings by week' });
+  const { tip, show, hide } = chartTip(wrap);
+  const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': 'Free-cash spending by week, against the weekly target' });
   svg.append(s('line', { class: 'zero', x1: padL, x2: W - padR, y1: y(0), y2: y(0) }));
 
   rows.forEach((r, i) => {
-    const cx = padL + slot * i + slot / 2;
-    const x = cx - bw / 2;
-    const neg = r.effect < 0;
-    const inProgress = r.partial && i === rows.length - 1;
-    const label = `Week of ${fmtDate(r.weekStart)}${inProgress ? ' (so far)' : ''}: ${signed(r.effect)}`;
-    const show = () => {
-      const bar = g.querySelector('.bar').getBoundingClientRect(), box = wrap.getBoundingClientRect();
-      fill(tip, h('b', { text: signed(r.effect) }),
-        h('span', { text: `Week of ${fmtDate(r.weekStart)}${inProgress ? ` · ${r.days} days so far` : r.partial ? ` · ${r.days} days of data` : ''}` }), h('br'),
-        h('span', { text: `Spent ${money(r.spent)} of ${money(r.target)}` }));
-      tip.hidden = false;
-      tip.style.left = `${Math.min(Math.max(bar.left + bar.width / 2 - box.left, 90), box.width - 90)}px`;
-      tip.style.top = `${bar.top - box.top - 8}px`;
-    };
+    const cx = padL + slot * i + slot / 2, over = r.spent > r.target;
+    const open = () => drill({ type: 'week', start: r.weekStart });
+    const bar = s('path', { class: 'bar' + (over ? ' neg' : ''), d: barPath(cx - bw / 2, y(0), y(r.spent), bw, 4) });
     const g = s('g', {
-      class: 'hit', tabindex: 0, role: 'button', 'aria-label': `${label}. Show these transactions.`,
-      onpointerenter: show, onpointerleave: () => { tip.hidden = true; }, onfocus: show, onblur: () => { tip.hidden = true; },
-      onclick: () => drill({ type: 'week', start: r.weekStart }),
-      onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill({ type: 'week', start: r.weekStart }); } },
+      class: 'hit', tabindex: 0, role: 'button',
+      'aria-label': `Week of ${fmtDate(r.weekStart)}: spent ${money(r.spent)} against a ${money(r.target)} target, ${over ? 'over' : 'under'}. Show these transactions.`,
+      onpointerenter: () => show(bar, [`${money(r.spent)} spent`, `Week of ${fmtDate(r.weekStart)}`, `Target ${money(r.target)} (${signed(r.effect)})`]),
+      onfocus: () => show(bar, [`${money(r.spent)} spent`, `Week of ${fmtDate(r.weekStart)}`, `Target ${money(r.target)} (${signed(r.effect)})`]),
+      onpointerleave: hide, onblur: hide, onclick: open,
+      onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
     },
       s('rect', { x: cx - slot / 2, y: 0, width: slot, height: H - padB + 16, fill: 'transparent' }),
-      s('path', { class: 'bar' + (neg ? ' neg' : '') + (inProgress ? ' partial' : ''), d: barPath(x, y(0), y(r.effect), bw, 4) }),
+      bar,
+      s('line', { class: 'tline', x1: cx - slot * 0.42, x2: cx + slot * 0.42, y1: y(r.target), y2: y(r.target) }),
       s('rect', { class: 'focus-ring', x: cx - slot / 2 + 1, y: 1, width: slot - 2, height: H - padB + 14, rx: 6 }));
     svg.append(g);
-    if (labelIdx.has(i)) {
-      svg.append(s('text', { class: 'val', x: cx, y: neg ? y(r.effect) + 15 : y(r.effect) - 7, 'text-anchor': 'middle', text: signed(r.effect) }));
+    if (labelAll || i === lo || i === hi) {
+      // the label sits just above its own bar, unless the target line is right there, then it goes above the line
+      let labelY = y(r.spent) - 7;
+      if (y(r.target) < y(r.spent) && y(r.target) > labelY - 12) labelY = y(r.target) - 7;
+      svg.append(s('text', { class: 'val', x: cx, y: labelY, 'text-anchor': 'middle', text: money(r.spent) }));
     }
     if (!everyOther || i % 2 === rows.length % 2 || i === rows.length - 1) {
       svg.append(s('text', { x: cx, y: H - 8, 'text-anchor': 'middle', text: fmtDate(r.weekStart) }));
@@ -419,6 +475,171 @@ function weeklyChart(rows) {
   });
   wrap.append(svg, tip);
   return wrap;
+}
+
+function renderWeeks(d) {
+  const rows = d.rows;
+  if (!rows.length) {
+    fill($('bgt-weeks'), h('h2', { id: 'bgt-weeks-title', text: 'Week by week' }),
+      h('p', { class: 'sub', text: 'Once you have a full week (Sunday to Saturday), your weeks line up against each other here.' }));
+    return;
+  }
+  const lowest = rows.reduce((a, r) => (r.spent < a.spent ? r : a)), highest = rows.reduce((a, r) => (r.spent > a.spent ? r : a));
+  const table = h('table', { class: 'tie' },
+    h('thead', {}, h('tr', {}, h('th', { text: 'Week of' }), h('th', { class: 'num', text: 'Spent' }), h('th', { class: 'num', text: 'Target' }), h('th', { class: 'num', text: '+/−' }))),
+    h('tbody', {}, [...rows].reverse().map(r => h('tr', {},
+      h('td', { text: fmtDate(r.weekStart) }), h('td', { class: 'num', text: money(r.spent) }),
+      h('td', { class: 'num', text: money(r.target) }), h('td', { class: 'num', text: swing(r.effect) })))));
+  fill($('bgt-weeks'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'bgt-weeks-title', text: 'Week by week' }), h('span', { class: 'sub', text: 'Sunday to Saturday' })),
+    weeksChart(rows),
+    h('div', { class: 'legend-row' },
+      h('span', { class: 'key' }, h('i'), 'Within target'),
+      h('span', { class: 'key' }, h('i', { class: 'red' }), 'Over target'),
+      h('span', { class: 'key' }, h('i', { class: 'dash' }), 'Weekly target')),
+    rows.length > 1 && h('p', { class: 'sub', text: `Lightest week: ${fmtDate(lowest.weekStart)}, ${money(lowest.spent)}. Heaviest: ${fmtDate(highest.weekStart)}, ${money(highest.spent)}.` }),
+    h('details', { class: 'fine' }, h('summary', { text: 'Show the numbers' }), h('div', { class: 'scroll' }, table)));
+}
+
+function savingsChart(series) {
+  const W = chartWidth('bgt-savings'), H = 200, padL = 8, padR = 12, padT = 30, padB = 30;
+  const vals = series.map(p => p.running);
+  const max = Math.max(0, ...vals), min = Math.min(0, ...vals), span = max - min || 1;
+  const y = v => padT + (max - v) / span * (H - padT - padB);
+  const n = series.length, x = i => padL + (n === 1 ? (W - padL - padR) / 2 : i * (W - padL - padR) / (n - 1));
+
+  const wrap = h('div', { class: 'chart-wrap' });
+  const { tip, show, hide } = chartTip(wrap);
+  const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': 'Running effect on savings, week by week' });
+  svg.append(s('line', { class: 'zero', x1: padL, x2: W - padR, y1: y(0), y2: y(0) }),
+    s('path', { class: 'line', d: series.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p.running)}`).join(' ') }));
+
+  const last = series[n - 1];
+  const dot = s('circle', { class: 'dot', cx: x(n - 1), cy: y(last.running), r: 4.5 });
+  svg.append(s('circle', { class: 'dot-ring', cx: x(n - 1), cy: y(last.running), r: 6.5 }), dot);
+  svg.append(s('text', { class: 'val', x: x(n - 1), y: y(last.running) + (last.running >= 0 ? -12 : 20), 'text-anchor': 'end', text: signed(last.running) }));
+
+  const marker = s('circle', { class: 'dot', cx: 0, cy: 0, r: 5, style: 'display:none' });
+  const markerRing = s('circle', { class: 'dot-ring', cx: 0, cy: 0, r: 7, style: 'display:none' });
+  svg.append(markerRing, marker);
+  const place = (i, on) => { for (const m of [marker, markerRing]) { m.style.display = on ? '' : 'none'; m.setAttribute('cx', x(i)); m.setAttribute('cy', y(series[i].running)); } };
+  const lines = p => [`${signed(p.running)} running total`, `Week of ${fmtDate(p.weekStart)}`, `That week: ${signed(p.effect)}`];
+  const step = n > 6 ? Math.ceil(n / 5) : 1;
+  series.forEach((p, i) => {
+    const slotW = n === 1 ? W : (W - padL - padR) / (n - 1);
+    const open = () => drill({ type: 'week', start: p.weekStart });
+    svg.append(s('rect', {
+      class: 'hit-col', tabindex: 0, role: 'button', x: x(i) - slotW / 2, y: 0, width: slotW, height: H - padB + 12, fill: 'transparent',
+      'aria-label': `Week of ${fmtDate(p.weekStart)}: running total ${signed(p.running)}. Show that week's transactions.`,
+      onpointerenter: () => { place(i, true); show(marker, lines(p)); }, onfocus: () => { place(i, true); show(marker, lines(p)); },
+      onpointerleave: () => { place(i, false); hide(); }, onblur: () => { place(i, false); hide(); },
+      onclick: open, onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
+    }));
+    if (i % step === 0 || i === n - 1) svg.append(s('text', { x: x(i), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle', text: fmtDate(p.weekStart) }));
+  });
+  wrap.append(svg, tip);
+  return wrap;
+}
+
+function renderSavingsImpact(d) {
+  const series = cumulativeSeries(d.complete);
+  if (series.length < 2) {
+    fill($('bgt-savings'), h('h2', { id: 'bgt-savings-title', text: 'Effect on your savings' }),
+      h('p', { class: 'sub', text: 'This needs at least two full weeks. It adds up every week’s result into one running total.' }));
+    return;
+  }
+  const total = series[series.length - 1].running;
+  const t = d.totals;
+  fill($('bgt-savings'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'bgt-savings-title', text: 'Effect on your savings' }), h('span', { class: 'sub', text: `since ${fmtDate(series[0].weekStart)}` })),
+    h('div', { style: 'font-size:32px;font-weight:700;letter-spacing:-0.02em', text: signed(total) }),
+    h('p', { class: 'sub', text: `${total >= 0 ? 'Your spending has added' : 'Your spending has pulled'} ${money(total)} ${total >= 0 ? 'to' : 'from'} savings across ${plural(series.length, 'full week', 'full weeks')}.${t.weeks ? ` The ${periodLabel(state.period).toLowerCase()} account for ${signed(t.effect)} of that.` : ''}` }),
+    savingsChart(series.slice(-26)),
+    h('p', { class: 'note', text: 'Each point is the running total at the end of a week. Above the line you have added to savings, below it you have pulled from savings.' }));
+}
+
+// ----- where it went, and habits, over the same period -----
+function renderWhere(d) {
+  const t = d.totals;
+  if (!t.weeks) {
+    fill($('where'), h('h2', { id: 'where-title', text: 'Where the free cash went' }), h('p', { class: 'sub', text: 'Nothing to show until there is a full week.' }));
+    return;
+  }
+  const b = categoryBreakdownRange(state.txs, t.from, t.to);
+  const before = d.prevTotals ? categoryBreakdownRange(state.txs, d.prevTotals.from, d.prevTotals.to) : null;
+  const beforeBy = new Map((before?.rows ?? []).map(r => [r.id, r.cents]));
+  const top = b.rows[0]?.cents ?? 1;
+  fill($('where'),
+    h('div', { class: 'card-head' },
+      h('h2', { id: 'where-title', text: 'Where the free cash went' }),
+      h('span', { class: 'sub', text: `${periodLabel(state.period)} · ${money(b.total)}` })),
+    b.rows.length
+      ? h('div', { class: 'cats' }, b.rows.map(r => {
+          const delta = before ? r.cents - (beforeBy.get(r.id) ?? 0) : null;
+          return h('button', { type: 'button', class: 'catrow', 'aria-label': `${r.name}: ${money(r.cents)}${delta ? `, ${signed(delta)} compared with the weeks before` : ''}. Show these transactions.`,
+            onclick: () => drill({ type: 'category', id: r.id, from: t.from, to: t.to }) },
+            h('span', { class: 'catname', text: r.name }),
+            h('span', { class: 'cattrack' },
+              h('span', { class: 'catbar' + (r.id === 'review' ? ' review' : ''), style: `width:${Math.max(1, r.cents / top * 56)}%` }),
+              h('span', { class: 'catval', text: `${money(r.cents)} · ${Math.round(r.share * 100)}%` }),
+              delta ? h('span', { class: 'catdelta', text: signed(delta) }) : null));
+        }))
+      : h('p', { class: 'sub', text: 'No free-cash spending in this period.' }),
+    b.rows.length && h('p', { class: 'note', text: `Tap a row to see the transactions behind it.${before ? ' The small number is the change from the weeks before.' : ''}` }));
+}
+
+function renderHabits(d) {
+  const t = d.totals;
+  const hb = habits(d.rows);
+  const streak = habits(d.complete).streak;
+  const dining = t.weeks ? diningOutRange(state.txs, t.from, t.to) : { cents: 0, share: 0 };
+  const biggest = t.weeks ? topPurchasesRange(state.txs, t.from, t.to, 1)[0] : null;
+  const att = attention(state.txs);
+  const c = d.compare;
+  const link = (label, filter) => h('button', { type: 'button', text: label, onclick: () => drill(filter) });
+
+  const good = [], watch = [];
+  if (hb.under > 0) good.push(h('li', { text: `${hb.under} of ${plural(hb.weeks, 'week', 'weeks')} came in under target.` }));
+  if (streak >= 2) good.push(h('li', { text: `${streak} weeks in a row under target, counting back from the latest full week.` }));
+  if (hb.best && hb.best.effect > 0) good.push(h('li', {}, `Best week: ${fmtDate(hb.best.weekStart)}, ${money(hb.best.effect)} added to savings.`, link('See it', { type: 'week', start: hb.best.weekStart })));
+  if (c && c.spentDelta < 0) good.push(h('li', { text: `Spending is down ${money(c.spentDelta)} from the ${plural(t.weeks, 'week', 'weeks')} before.` }));
+  if (hb.over > 0) watch.push(h('li', { text: `${hb.over} of ${plural(hb.weeks, 'week', 'weeks')} ran over target.` }));
+  if (hb.worst && hb.worst.effect < 0) watch.push(h('li', {}, `Roughest week: ${fmtDate(hb.worst.weekStart)}, ${money(hb.worst.effect)} pulled from savings.`, link('See it', { type: 'week', start: hb.worst.weekStart })));
+  if (c && c.spentDelta > 0 && (c.pct ?? 0) >= 0.1) watch.push(h('li', { text: `Spending is up ${money(c.spentDelta)} (${Math.round(c.pct * 100)}%) from the ${plural(t.weeks, 'week', 'weeks')} before.` }));
+  if (dining.cents > 0 && dining.share >= 0.35) watch.push(h('li', { text: `Restaurants, coffee and bars are ${Math.round(dining.share * 100)}% of free spending (${money(dining.cents)}).` }));
+  if (biggest) watch.push(h('li', { text: `Biggest purchase: ${money(biggest.cents)} at ${biggest.description}.` }));
+  if (att.review.count) watch.push(h('li', {}, `${plural(att.review.count, 'charge', 'charges')} (${money(att.review.cents)}) still need a category. They count against free cash until then.`, link('Review', { type: 'category', id: 'review' })));
+  if (att.reimbursements.length) watch.push(h('li', {}, `Expecting to be paid back for ${plural(att.reimbursements.length, 'big dinner or drinks charge', 'big dinner or drinks charges')}?`, link('See them', { type: 'ask' })));
+
+  const card = (cls, title, items) => h('div', { class: `habit-card ${cls}` },
+    h('h2', { text: title }),
+    items.length ? h('ul', {}, items) : h('p', { class: 'none', text: 'Nothing here yet.' }));
+  fill($('habits'), card('good', 'Going well', good), card('watch', 'Worth a look', watch));
+}
+
+// ----- one month, start to finish -----
+function renderMonth(asOf, keepFocus) {
+  const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort().reverse();
+  const p = monthPace(state.txs, plan, state.ym, asOf);
+  const m = monthSummary(state.txs, plan, state.ym);
+  const over = p.left < 0;
+  const select = h('select', { id: 'month', 'aria-label': 'Month', onchange: e => { state.ym = e.target.value; renderMonth(asOf, true); } },
+    months.map(ym => h('option', { value: ym, text: fmtMonth(ym), selected: ym === state.ym })));
+  const row = (label, g) => [h('span', { text: label }), h('span', { text: `${money(g.actual)} of ${money(g.planned)}` })];
+  fill($('monthcard'),
+    h('div', { class: 'card-head' }, h('h2', { id: 'month-title', text: 'Month in review' }), select),
+    h('div', { style: 'font-size:28px;font-weight:700;letter-spacing:-0.02em' }, money(Math.abs(p.left)),
+      h('small', { style: 'font-size:16px;font-weight:600;color:var(--ink-2);margin-left:6px', text: over ? 'over free cash' : 'under free cash' })),
+    meter(p.spent, p.free, `Spent ${money(p.spent)} of ${money(p.free)}`),
+    h('p', { class: 'sub', text: p.complete
+      ? `Spent ${money(p.spent)} of ${money(p.free)} free cash. The month finished ${money(Math.abs(p.left))} ${over ? 'over' : 'under'}.`
+      : `Month still in progress: ${money(p.spent)} spent so far, out of ${money(p.free)} for the whole month.` }),
+    h('div', { class: 'plan-rows' },
+      row('Paycheck', m.income), row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
+      row('One-time & annual set-aside', m.onetime),
+      (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation),
+      row('Savings moved', m.savings)));
+  if (keepFocus) $('month').focus();
 }
 
 // ---------- trial balance and income statement (TB Summary tab) ----------
@@ -620,101 +841,6 @@ function renderTie() {
     savingsMoveForm(msg), msg);
 }
 
-function renderTrend() {
-  const all = weeklyRunning(state.txs, plan);
-  const total = all[all.length - 1].running;
-  const rows = all.slice(-12);
-  fill($('trend'),
-    h('div', { class: 'card-head' },
-      h('h2', { id: 'trend-title', text: 'Effect on savings' }),
-      h('span', { class: 'sub', text: `since ${fmtDate(all[0].from ?? state.txs[0].date)}` })),
-    h('div', { style: 'font-size:32px;font-weight:700;letter-spacing:-0.02em', text: signed(total) }),
-    h('p', { class: 'sub', text: total >= 0
-      ? 'Your spending has been adding to savings. Each bar is a week against its target.'
-      : 'Your spending has been pulling from savings. Each bar is a week against its target.' }),
-    weeklyChart(rows),
-    h('div', { class: 'legend-row' },
-      h('span', { class: 'key' }, h('i'), 'Added to savings'),
-      h('span', { class: 'key' }, h('i', { class: 'red' }), 'Pulled from savings'),
-      rows[rows.length - 1].partial && h('span', { text: 'Faded bar: week still in progress' })));
-}
-
-function renderMonth(asOf, keepFocus) {
-  const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort().reverse();
-  const p = monthPace(state.txs, plan, state.ym, asOf);
-  const m = monthSummary(state.txs, plan, state.ym);
-  const over = p.left < 0;
-  const pct = p.free > 0 ? Math.min(100, Math.max(0, p.spent / p.free * 100)) : 100;
-  const select = h('select', { id: 'month', 'aria-label': 'Month', onchange: e => { state.ym = e.target.value; renderAfterMonth(true); } },
-    months.map(ym => h('option', { value: ym, text: fmtMonth(ym), selected: ym === state.ym })));
-  let pace;
-  if (p.complete) pace = `Finished the month ${money(p.free - p.spent)} ${p.left >= 0 ? 'ahead of' : 'over'} plan.`;
-  else if (p.elapsed >= 7) pace = `At this pace you'd finish about ${money(p.projectedEffect)} ${p.projectedEffect >= 0 ? 'ahead' : 'over'}.`;
-  else pace = 'Too early to project. Check back after the first week.';
-  const row = (label, g) => [h('span', { text: label }), h('span', { text: `${money(g.actual)} of ${money(g.planned)}` })];
-  fill($('monthcard'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'month-title', text: 'This month' }), select),
-    h('div', { style: 'font-size:28px;font-weight:700;letter-spacing:-0.02em' }, money(Math.abs(p.left)),
-      h('small', { style: 'font-size:16px;font-weight:600;color:var(--ink-2);margin-left:6px', text: over ? 'over free cash' : 'free cash left' })),
-    h('div', { class: 'meter' + (over ? ' over' : ''), role: 'img', 'aria-label': `Spent ${money(p.spent)} of ${money(p.free)}` },
-      h('div', { class: 'fill', style: `width:${pct}%` })),
-    h('p', { class: 'sub', text: `Spent ${money(p.spent)} of ${money(p.free)} free cash. ${pace}` }),
-    h('div', { class: 'plan-rows' },
-      row('Paycheck', m.income), row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
-      row('One-time & annual set-aside', m.onetime),
-      (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation),
-      row('Savings moved', m.savings)));
-  if (keepFocus) $('month').focus();
-}
-
-function renderWhere() {
-  const b = categoryBreakdown(state.txs, state.ym);
-  const top = b.rows[0]?.cents ?? 1;
-  fill($('where'),
-    h('div', { class: 'card-head' },
-      h('h2', { id: 'where-title', text: 'Where the free cash went' }),
-      h('span', { class: 'sub', text: `${fmtMonth(state.ym)} · ${money(b.total)}` })),
-    b.rows.length
-      ? h('div', { class: 'cats' }, b.rows.map(r =>
-          h('button', { type: 'button', class: 'catrow', 'aria-label': `${r.name}: ${money(r.cents)}. Show these transactions.`,
-            onclick: () => drill({ type: 'category', id: r.id, ym: state.ym }) },
-            h('span', { class: 'catname', text: r.name }),
-            h('span', { class: 'cattrack' },
-              h('span', { class: 'catbar' + (r.id === 'review' ? ' review' : ''), style: `width:${Math.max(1, r.cents / top * 62)}%` }),
-              h('span', { class: 'catval', text: `${money(r.cents)} · ${Math.round(r.share * 100)}%` })))))
-      : h('p', { class: 'sub', text: 'No free-cash spending in this month yet.' }),
-    b.rows.length && h('p', { class: 'note', text: 'Tap a row to see the transactions behind it.' }));
-}
-
-function renderHabits() {
-  const rows = weeklyRunning(state.txs, plan);
-  const hb = habits(rows);
-  const m = monthSummary(state.txs, plan, state.ym);
-  const dining = diningOut(state.txs, state.ym);
-  const biggest = topPurchases(state.txs, state.ym, 1)[0];
-  const att = attention(state.txs);
-  const link = (label, filter) => h('button', { type: 'button', text: label, onclick: () => drill(filter) });
-
-  const good = [], watch = [];
-  if (hb.under > 0) good.push(h('li', { text: `${hb.under} of ${plural(hb.weeks, 'week', 'weeks')} came in under target.` }));
-  if (hb.streak >= 2) good.push(h('li', { text: `${hb.streak} weeks in a row under target.` }));
-  if (hb.best && hb.best.effect > 0) good.push(h('li', {}, `Best week: ${fmtDate(hb.best.weekStart)}, ${money(hb.best.effect)} added to savings.`, link('See it', { type: 'week', start: hb.best.weekStart })));
-  if (m.subscriptions.planned > 0 && m.subscriptions.actual > 0 && m.subscriptions.actual <= m.subscriptions.planned) {
-    good.push(h('li', { text: `Subscriptions are on plan (${money(m.subscriptions.actual)} of ${money(m.subscriptions.planned)}).` }));
-  }
-  if (hb.over > 0) watch.push(h('li', { text: `${hb.over} of ${plural(hb.weeks, 'week', 'weeks')} ran over target.` }));
-  if (hb.worst && hb.worst.effect < 0) watch.push(h('li', {}, `Roughest week: ${fmtDate(hb.worst.weekStart)}, ${money(hb.worst.effect)} pulled from savings.`, link('See it', { type: 'week', start: hb.worst.weekStart })));
-  if (dining.cents > 0 && dining.share >= 0.35) watch.push(h('li', { text: `Restaurants, coffee and bars are ${Math.round(dining.share * 100)}% of free spending (${money(dining.cents)}).` }));
-  if (biggest) watch.push(h('li', { text: `Biggest purchase in ${fmtMonth(state.ym).split(' ')[0]}: ${money(biggest.cents)} at ${biggest.description}.` }));
-  if (att.review.count) watch.push(h('li', {}, `${plural(att.review.count, 'charge', 'charges')} (${money(att.review.cents)}) still need a category. They count against free cash until then.`, link('Review', { type: 'category', id: 'review' })));
-  if (att.reimbursements.length) watch.push(h('li', {}, `Expecting to be paid back for ${plural(att.reimbursements.length, 'big dinner or drinks charge', 'big dinner or drinks charges')}?`, link('See them', { type: 'ask' })));
-
-  const card = (cls, title, items) => h('div', { class: `habit-card ${cls}` },
-    h('h2', { text: title }),
-    items.length ? h('ul', {}, items) : h('p', { class: 'none', text: 'Nothing here yet.' }));
-  fill($('habits'), card('good', 'Going well', good), card('watch', 'Worth a look', watch));
-}
-
 // ---------- month-by-month table ----------
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const whole = c => {
@@ -793,20 +919,14 @@ function setTab(tab) {
   state.tab = tab;
   if (tab !== 'gl') state.returnTab = null;
   if (tab === 'gl' && state.txs.length) renderLedger();
+  if (tab === 'budget' && state.txs.length) renderBudget(asOfDate(state.txs), false);   // redraw the charts at this screen's width
   applyTab();
 }
 for (const name of TABS) $(`tab-${name}`).addEventListener('click', () => setTab(name));
-$('gl-back').addEventListener('click', () => { const back = state.returnTab; state.returnTab = null; setTab(back ?? 'budget'); });
+// Coming back from a drill-down also drops its filter, so GL Detail isn't left showing one slice later.
+$('gl-back').addEventListener('click', () => { const back = state.returnTab; state.returnTab = null; resetGl(); setTab(back ?? 'budget'); });
 $('empty-settings').addEventListener('click', () => openSettings('saving'));
 $('banner-btn').addEventListener('click', () => { openSettings('saving'); $('sec-pass')?.focus(); });
-
-function renderAfterMonth(keepFocus) {
-  const asOf = asOfDate(state.txs);
-  renderMonth(asOf, keepFocus);
-  renderWhere();
-  renderHabits();
-  renderLedger();
-}
 
 function render() {
   renderSaveState();
@@ -814,7 +934,7 @@ function render() {
   $('app').hidden = state.locked;
   $('add-btn').hidden = state.locked || state.demo;
   if (state.locked) {
-    for (const id of ['hero', 'trend', 'monthcard', 'where', 'habits', 'matrix', 'plan-body', 'chips', 'gl-controls', 'coverage']) $(id).replaceChildren();
+    for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'matrix', 'plan-body', 'chips', 'gl-controls', 'coverage']) $(id).replaceChildren();
     $('out').querySelector('tbody').replaceChildren();
     $('gl-count').textContent = '';
     $('settings-body').replaceChildren();
@@ -828,9 +948,8 @@ function render() {
     const asOf = asOfDate(state.txs);
     const sample = JSON.stringify(plan) === JSON.stringify(samplePlan);
     $('asof').textContent = `Through ${fmtDate(asOf)}.` + (sample && !state.demo ? ' Using a sample plan until you set your own under Your plan.' : '');
-    renderHero(asOf);
-    renderTrend();
-    renderAfterMonth(false);
+    renderBudget(asOf, false);
+    renderLedger();
     renderTB(asOf, false);
     renderTie();
   }
@@ -842,7 +961,7 @@ function render() {
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (state.txs.length && !state.locked) renderTrend(); }, 150);
+  resizeTimer = setTimeout(() => { if (state.txs.length && !state.locked && state.tab === 'budget') renderBudget(asOfDate(state.txs), false); }, 150);
 });
 
 // ---------- your plan (inside the Budget tab, collapsed) ----------

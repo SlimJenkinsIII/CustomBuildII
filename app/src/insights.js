@@ -1,14 +1,14 @@
 // Numbers behind the spending hub. Pure functions: transactions + plan in, plain facts out.
 import { CATEGORIES } from './categories.js';
-import { freeSpend, monthOf, daysInMonth, plannedFreeCash } from './budget.js';
+import { freeSpend, monthOf, daysInMonth, daysBetween, plannedFreeCash } from './budget.js';
 
 export const asOfDate = txs => txs.reduce((m, t) => (t.date > m ? t.date : m), '');
 
-// Where free-cash money went in a month, biggest first. Refunds net against their category.
-export function categoryBreakdown(txs, ym) {
+// Where free-cash money went between two dates (inclusive), biggest first. Refunds net against their category.
+export function categoryBreakdownRange(txs, from, to) {
   const by = new Map();
   for (const t of txs) {
-    if (monthOf(t.date) !== ym) continue;
+    if (t.date < from || t.date > to) continue;
     const spent = freeSpend(t);
     if (!spent) continue;
     const row = by.get(t.category) ?? { id: t.category, name: CATEGORIES[t.category].name, cents: 0, count: 0 };
@@ -19,6 +19,7 @@ export function categoryBreakdown(txs, ym) {
   const total = rows.reduce((s, r) => s + r.cents, 0);
   return { total, rows: rows.map(r => ({ ...r, share: total ? r.cents / total : 0 })) };
 }
+export const categoryBreakdown = (txs, ym) => categoryBreakdownRange(txs, `${ym}-01`, `${ym}-31`);
 
 // How a month is going. Projection is a straight-line guess, so it only means something a week in.
 export function monthPace(txs, plan, ym, asOf) {
@@ -32,18 +33,20 @@ export function monthPace(txs, plan, ym, asOf) {
   return { free, spent, left: free - spent, elapsed, dim, complete, projected, projectedEffect: free - projected };
 }
 
-export function topPurchases(txs, ym, n = 3) {
+export function topPurchasesRange(txs, from, to, n = 3) {
   return txs
-    .filter(t => monthOf(t.date) === ym && t.cents < 0 && (CATEGORIES[t.category].group === 'free' || t.category === 'review'))
+    .filter(t => t.date >= from && t.date <= to && t.cents < 0 && (CATEGORIES[t.category].group === 'free' || t.category === 'review'))
     .sort((a, b) => a.cents - b.cents).slice(0, n);
 }
+export const topPurchases = (txs, ym, n = 3) => topPurchasesRange(txs, `${ym}-01`, `${ym}-31`, n);
 
 const DINING = new Set(['free_restaurants', 'free_coffee', 'free_alcohol']);
-export function diningOut(txs, ym) {
-  const dining = txs.filter(t => monthOf(t.date) === ym && DINING.has(t.category)).reduce((s, t) => s + freeSpend(t), 0);
-  const { total } = categoryBreakdown(txs, ym);
+export function diningOutRange(txs, from, to) {
+  const dining = txs.filter(t => t.date >= from && t.date <= to && DINING.has(t.category)).reduce((s, t) => s + freeSpend(t), 0);
+  const { total } = categoryBreakdownRange(txs, from, to);
   return { cents: dining, share: total ? dining / total : 0 };
 }
+export const diningOut = (txs, ym) => diningOutRange(txs, `${ym}-01`, `${ym}-31`);
 
 // Streaks and extremes from the weekly rows. Weeks with under 3 days of data are too thin to judge.
 export function habits(rows) {
@@ -174,4 +177,63 @@ export function monthlyMatrix(txs, year, asOf = '') {
   lines.push({ kind: 'running', label: 'Running total, net income', byMonth: cumulative });
 
   return { year, months, hasData, dataMonths, partialMonth, fullMonthCount: fullMonths.length, lines };
+}
+
+// ---------- looking back over a stretch of weeks ----------
+// Only full Sunday-to-Saturday weeks are compared, so a week still in progress (or cut short by where your
+// data starts) can't pass for a cheap one.
+export const completeWeeks = rows => rows.filter(r => r.days === 7);
+
+// The weeks in a period, plus the same number of weeks just before it (to compare against).
+export function periodWindow(complete, kind) {
+  const n = { '4w': 4, '8w': 8, '12w': 12 }[kind];
+  if (n) {
+    const rows = complete.slice(-n);
+    const before = complete.slice(0, complete.length - rows.length).slice(-n);
+    return { rows, prev: before.length === rows.length ? before : [] };
+  }
+  const year = complete.length ? complete[complete.length - 1].weekStart.slice(0, 4) : '';
+  return { rows: complete.filter(r => r.weekStart >= `${year}-01-01`), prev: [] };      // year to date: no "before" to compare
+}
+
+export function periodTotals(rows) {
+  const sum = k => rows.reduce((s, r) => s + r[k], 0);
+  const byEffect = [...rows].sort((a, b) => b.effect - a.effect);
+  return {
+    weeks: rows.length, spent: sum('spent'), target: sum('target'), effect: sum('effect'),
+    under: rows.filter(r => r.effect >= 0).length, over: rows.filter(r => r.effect < 0).length,
+    avgSpent: rows.length ? Math.round(sum('spent') / rows.length) : 0,
+    avgTarget: rows.length ? Math.round(sum('target') / rows.length) : 0,
+    best: byEffect[0] ?? null, worst: byEffect[byEffect.length - 1] ?? null,
+    from: rows[0]?.weekStart ?? null, to: rows.length ? rows[rows.length - 1].weekEnd : null,
+  };
+}
+
+export function compareTotals(cur, prev) {
+  if (!prev || !prev.weeks) return null;
+  const delta = cur.spent - prev.spent;
+  return { spentDelta: delta, pct: prev.spent ? delta / prev.spent : null, effectDelta: cur.effect - prev.effect };
+}
+
+// Running total of the effect on savings, week by week.
+export function cumulativeSeries(rows) {
+  let running = 0;
+  return rows.map(r => ({ weekStart: r.weekStart, weekEnd: r.weekEnd, spent: r.spent, target: r.target, effect: r.effect, running: (running += r.effect) }));
+}
+
+// Accounts whose statements stop well before the others', so the latest days can look lighter than they were.
+export function staleAccounts(txs, gapDays = 4) {
+  const cov = coverage(txs);
+  if (cov.length < 2) return [];
+  const latest = cov.reduce((m, c) => (c.to > m ? c.to : m), '');
+  return cov.map(c => ({ account: c.account, to: c.to, behind: daysBetween(c.to, latest) })).filter(c => c.behind >= gapDays);
+}
+
+// The month to review first: the latest one that is over, else the latest there is.
+export function defaultMonth(txs) {
+  const months = [...new Set(txs.map(t => monthOf(t.date)))].sort();
+  if (!months.length) return null;
+  const asOf = asOfDate(txs), asOfMonth = monthOf(asOf);
+  const finished = months.filter(ym => ym < asOfMonth || Number(asOf.slice(8)) === daysInMonth(ym));
+  return finished[finished.length - 1] ?? months[months.length - 1];
 }

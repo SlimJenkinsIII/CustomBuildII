@@ -170,6 +170,18 @@
     .placeholder { align-items: flex-start; }
     .placeholder p { color: var(--muted); font-size: 14px; max-width: 52ch; }
 
+    /* budget: looking back */
+    svg.chart .tline { stroke: var(--ink); stroke-width: 2; stroke-linecap: round; opacity: .6; }
+    svg.chart .line { fill: none; stroke: var(--blue); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    svg.chart .dot { fill: var(--blue); }
+    svg.chart .dot-ring { fill: var(--card); }
+    svg.chart .hit-col { cursor: pointer; }
+    svg.chart .hit-col:focus { outline: none; }
+    svg.chart .hit-col:focus-visible { stroke: var(--ink); stroke-width: 2; }
+    .key i.dash { width: 14px; height: 2px; border-radius: 1px; background: var(--ink); opacity: .6; }
+    .catdelta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .seg { flex-wrap: wrap; }
+
     /* trial balance, tie-out */
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; background: var(--bg); }
     .seg button { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-2); background: none; border: 0; border-radius: 999px; padding: 5px 12px; cursor: pointer; }
@@ -330,11 +342,12 @@
       </div>
 
       <div class="panel" id="panel-budget" role="tabpanel" aria-labelledby="tab-budget">
-        <section class="card" id="hero" aria-labelledby="hero-title"></section>
-        <section class="card" id="trend" aria-labelledby="trend-title"></section>
-        <section class="card" id="monthcard" aria-labelledby="month-title"></section>
+        <section class="card" id="bgt-summary" aria-labelledby="bgt-title"></section>
+        <section class="card" id="bgt-weeks" aria-labelledby="bgt-weeks-title"></section>
+        <section class="card" id="bgt-savings" aria-labelledby="bgt-savings-title"></section>
         <section class="card" id="where" aria-labelledby="where-title"></section>
         <section class="habits" id="habits"></section>
+        <section class="card" id="monthcard" aria-labelledby="month-title"></section>
         <details class="ledger" id="plan-details">
           <summary id="plan-line">Your plan</summary>
           <div id="plan-body"></div>

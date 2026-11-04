@@ -96,10 +96,28 @@ server.listen(0, async () => {
 
   // ---------- load ----------
   await page.setInputFiles('#file', SAMPLES);
-  await page.waitForSelector('#panel-budget:not([hidden]) #hero');
+  await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num');
   const n = await txCount();
   check('statements load', n === 74, `(${n} transactions)`);
   check('banner warns data is not saved', await page.locator('#savebanner').isVisible() && (await chip()) === 'Not saved yet');
+
+  // ---------- the Budget tab looks back ----------
+  check('Budget is a look back, with no "This week" card', (await page.textContent('#bgt-title')) === 'Last 4 weeks' && !(await body()).includes('This week'));
+  check('it leads with the effect on savings', /^[+\u2212]\$/.test((await page.textContent('#bgt-summary .hero-num')).trim()));
+  const bars = () => page.locator('#bgt-weeks g.hit').count();
+  check('week by week: one bar per full week (4)', (await bars()) === 4);
+  await page.click('#bgt-summary button[aria-label="Last 8 weeks"]');
+  check('8 weeks shows 8 bars and updates the heading', (await bars()) === 8 && (await page.textContent('#bgt-title')) === 'Last 8 weeks');
+  await page.click('#bgt-summary button[aria-label="Year to date"]');
+  check('year to date shows every full week this year (9)', (await bars()) === 9);
+  await page.click('#bgt-summary button[aria-label="Last 4 weeks"]');
+  check('the savings card has a running-total line', await page.locator('#bgt-savings svg path.line').count() === 1 && /since/.test(await page.textContent('#bgt-savings')));
+  check('the numbers table is available behind the chart', (await page.locator('#bgt-weeks details tbody tr').count()) === 4);
+  await page.locator('#bgt-weeks g.hit').first().click();
+  check('tapping a week opens its transactions, with a way back', (await page.getAttribute('#tab-gl', 'aria-selected')) === 'true' && /^Week of/.test((await page.textContent('#chips')).trim()) && /Back to Budget/.test(await page.textContent('#gl-back')));
+  await page.click('#gl-back');
+  check('and Back returns to Budget', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
+  check('Month in review defaults to the latest finished month', (await page.inputValue('#month')) === '2026-02');
 
   // ---------- passphrase ----------
   await page.click('#banner-btn');
@@ -115,7 +133,7 @@ server.listen(0, async () => {
 
   // ---------- plan lives in Budget ----------
   check('plan is collapsed by default', !(await page.evaluate(() => document.getElementById('plan-details').open)));
-  await page.click('#hero .linkbtn');                            // the quiet "Edit plan" link
+  await page.click('#edit-plan');                            // the quiet "Edit plan" link
   check('"Edit plan" opens the plan', await page.evaluate(() => document.getElementById('plan-details').open));
   await page.fill('#plan-income', '5000'); await page.press('#plan-income', 'Tab');
   check('plan edit updates free cash', /Free cash: \$\d/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
@@ -231,7 +249,7 @@ server.listen(0, async () => {
   await page.waitForFunction(() => /Wrong passphrase/.test(document.getElementById('lock-msg').textContent), null, { timeout: 15000 });
   check('wrong passphrase rejected', await page.locator('#lock').isVisible());
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
-  await page.waitForSelector('#panel-budget:not([hidden]) #hero', { timeout: 15000 });
+  await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num', { timeout: 15000 });
   await page.click('#tab-gl');
   check('unlock restores every transaction, including the one logged by hand', (await txCount()) === n + 1);
   check('the hand-logged move survived and is marked', (await glRow('BY HAND').textContent()).includes('entered by hand'));
@@ -325,7 +343,7 @@ server.listen(0, async () => {
   await page.waitForSelector('#lock:not([hidden])');
   check('lock now hides and clears everything', !(await body()).includes('WHOLEFDS') && await page.locator('#app').isHidden());
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
-  await page.waitForSelector('#panel-budget:not([hidden]) #hero', { timeout: 15000 });
+  await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num', { timeout: 15000 });
   check('and unlocks again, back on Budget', true);
 
   check('no console errors or security-policy violations', problems.length === 0, JSON.stringify(problems));

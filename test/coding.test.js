@@ -163,3 +163,79 @@ test('a sub account is picked up by the income statement under its own line', ()
     assert.equal(m.lines.find(l => l.id === a.id).total, 450);
   } finally { resetAll(); }
 });
+
+// ---------- deleting (merging) accounts ----------
+import { applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, canRemove, resolveCategory, removedList, selectableCategories } from '../app/src/categories.js';
+const resetRemoved = () => { applyRemoved({}); resetAll(); };
+
+test('deleting an account merges it into one of the same kind, and everything follows', () => {
+  try {
+    const removed = removeAccount({}, 'sub_gym', 'sub_other');
+    applyRemoved(removed);
+    assert.equal(resolveCategory('sub_gym'), 'sub_other');
+    assert.equal(codingList([], {}).some(r => r.key === 'sub_gym'), false);
+    assert.equal(selectableCategories([]).some(c => c.id === 'sub_gym'), false);
+    assert.equal(chartOfAccounts().some(a => a.code === '5220'), false);
+    assert.equal(removedList().find(r => r.key === 'sub_gym').into, 'sub_other');
+    // the freed number can be used again
+    assert.doesNotThrow(() => setCode({}, 'sub_other', '5220'));
+  } finally { resetRemoved(); }
+  assert.equal(resolveCategory('sub_gym'), 'sub_gym');
+});
+
+test('four subscription accounts can be folded into one', () => {
+  try {
+    let removed = {};
+    for (const id of ['sub_streaming', 'sub_software', 'sub_gym']) removed = removeAccount(removed, id, 'sub_other');
+    applyRemoved(removed);
+    assert.deepEqual(['sub_streaming', 'sub_software', 'sub_gym'].map(resolveCategory), ['sub_other', 'sub_other', 'sub_other']);
+    assert.equal(codingList([], {}).filter(r => r.class === 'Expenses' && /^52/.test(r.code)).length, 1);
+  } finally { resetRemoved(); }
+});
+
+test('merging into an account that is itself deleted later follows it on', () => {
+  try {
+    let removed = removeAccount({}, 'sub_gym', 'sub_software');
+    applyRemoved(removed);
+    removed = removeAccount(removed, 'sub_software', 'sub_other');
+    applyRemoved(removed);
+    assert.equal(resolveCategory('sub_gym'), 'sub_other');
+    assert.equal(removed.sub_gym, 'sub_other');
+  } finally { resetRemoved(); }
+});
+
+test('only same-kind accounts are offered, and savings, trips, banks and the last account of a kind stay', () => {
+  assert.ok(removeTargets('sub_gym').every(t => /^52/.test(t.code)));
+  assert.equal(canRemove('save_chase'), false);
+  assert.equal(canRemove('vac1_food'), false);
+  assert.equal(canRemove('review'), false);
+  assert.equal(canRemove('onetime_annual'), false);   // the only account of its kind
+  assert.equal(canRemove('sub_gym'), true);
+  assert.throws(() => removeAccount({}, 'sub_gym', 'free_coffee'), /same kind/);
+  assert.throws(() => removeAccount({}, 'save_chase', 'save_amex'), /cannot be deleted/);
+});
+
+test('a deleted account can be restored', () => {
+  try {
+    const removed = removeAccount({}, 'sub_gym', 'sub_other');
+    assert.deepEqual(restoreAccount(removed, 'sub_gym'), {});
+    applyRemoved(restoreAccount(removed, 'sub_gym'));
+    assert.equal(resolveCategory('sub_gym'), 'sub_gym');
+  } finally { resetRemoved(); }
+});
+
+test('saved deletions are cleaned: unknown accounts, other kinds, loops and sub accounts are dropped', () => {
+  assert.deepEqual(cleanRemoved({ sub_gym: 'sub_other', nope: 'sub_other', sub_software: 'free_coffee', save_chase: 'save_amex', sub_other: 'sub_other' }), { sub_gym: 'sub_other' });
+  assert.deepEqual(cleanRemoved({ sub_gym: 'sub_software', sub_software: 'sub_gym' }), {});
+  assert.deepEqual(cleanRemoved(null), {});
+});
+
+test('transactions filed under a deleted account show under the one it moved into', () => {
+  try {
+    applyRemoved(removeAccount({}, 'sub_gym', 'sub_other'));
+    const t = { id: 'g', date: '2026-03-02', cents: -4000, description: 'PLANET FITNESS', account: 'chase-checking', category: resolveCategory('sub_gym') };
+    const m = monthlyMatrix([t], '2026', '2026-03-31');
+    assert.equal(m.lines.find(l => l.id === 'sub_other').total, 4000);
+    assert.equal(m.lines.some(l => l.id === 'sub_gym'), false);
+  } finally { resetRemoved(); }
+});

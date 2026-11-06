@@ -135,7 +135,7 @@ export const sourceLabel = account => {
 // Full chart of accounts, sorted by code, each marked active (used today) or planned.
 export function chartOfAccounts(trips = []) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
-  const fromCategories = Object.values(CATEGORIES).filter(x => x.code && (x.group !== 'vacation' || open.has(x.slot)))
+  const fromCategories = Object.values(CATEGORIES).filter(x => x.code && !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
     .map(x => ({ code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: 'Active' }));
   const fromSources = Object.values(SOURCE_ACCOUNTS).map(x => ({ ...x, status: 'Active' }));
   const planned = PLANNED.map(x => ({ ...x, status: 'Planned' }));
@@ -156,7 +156,7 @@ export function applyTripNames(trips = []) {
 export function selectableCategories(trips = []) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
   return Object.values(CATEGORIES)
-    .filter(x => x.group !== 'vacation' || open.has(x.slot))
+    .filter(x => !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account' }));
 }
 
@@ -174,7 +174,7 @@ export const defaultCode = key => (key.startsWith('src:') ? DEFAULT_SOURCE_CODES
 // Every account that holds a number, with the number it would have under a given coding.
 function accountsWith(coding) {
   return [
-    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id]).map(x => ({ key: x.id, name: x.name, code: coding[x.id] ?? DEFAULT_CODES[x.id] })),
+    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED)).map(x => ({ key: x.id, name: x.name, code: coding[x.id] ?? DEFAULT_CODES[x.id] })),
     ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, name: v.name, code: coding[`src:${k}`] ?? DEFAULT_SOURCE_CODES[`src:${k}`] })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, name: p.name, code: p.code })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, name: a.name, code: a.code })),
@@ -187,7 +187,7 @@ function accountsWith(coding) {
 // (under 1100: 1110, 1120, ...; under 5110: 5111, 5112, ...). It files and reports like its parent.
 const NO_RENAME = new Set(['transfer', 'review']);
 export const canRename = key => key in DEFAULT_NAMES && !NO_RENAME.has(key) && CATEGORIES[key]?.group !== 'vacation';
-const canParent = key => !!CATEGORIES[key] && !!DEFAULT_CODES[key] && !['vacation', 'system'].includes(CATEGORIES[key].group);
+const canParent = key => !!CATEGORIES[key] && !(key in REMOVED) && !!DEFAULT_CODES[key] && !['vacation', 'system'].includes(CATEGORIES[key].group);
 
 export function cleanNames(raw) {
   const out = {};
@@ -213,6 +213,56 @@ export function applyNames(names = {}) {
   for (const x of Object.values(CATEGORIES)) if (canRename(x.id)) x.name = names[x.id] ?? DEFAULT_NAMES[x.id];
   for (const [k, v] of Object.entries(SOURCE_ACCOUNTS)) v.name = names[`src:${k}`] ?? DEFAULT_NAMES[`src:${k}`];
 }
+
+// ---------- deleting an account ----------
+// A deleted account is merged into another account of the same kind: anything filed under it, now or in future,
+// lands in the one you chose. Nothing is lost, and Restore brings the account back. Savings accounts, banks and
+// cards, trips and system accounts can't be deleted here.
+let REMOVED = {};
+const REMOVABLE_GROUPS = new Set(['income', 'fixed', 'subscriptions', 'free', 'other', 'onetime']);
+export const isRemoved = id => id in REMOVED;
+export function resolveCategory(id) {
+  for (let i = 0; i < 20 && id in REMOVED; i++) id = REMOVED[id];
+  return id;
+}
+export const removeTargets = id => {
+  const group = CATEGORIES[id]?.group;
+  return Object.values(CATEGORIES).filter(x => x.id !== id && x.group === group && DEFAULT_CODES[x.id] && !(x.id in REMOVED))
+    .sort((a, b) => a.code.localeCompare(b.code)).map(x => ({ key: x.id, code: x.code, name: x.name }));
+};
+export const canRemove = id => !!CATEGORIES[id] && !CATEGORIES[id].custom && REMOVABLE_GROUPS.has(CATEGORIES[id].group) && !!DEFAULT_CODES[id] && !(id in REMOVED) && removeTargets(id).length > 0;
+
+export function removeAccount(removed, id, target) {
+  if (!canRemove(id)) throw new Error('That account cannot be deleted.');
+  if (!removeTargets(id).some(t => t.key === target)) throw new Error('Choose an account of the same kind to move it into.');
+  // anything already merged into the deleted account follows it to the new home
+  const next = Object.fromEntries(Object.entries(removed).map(([k, v]) => [k, v === id ? target : v]));
+  next[id] = target;
+  return next;
+}
+export function restoreAccount(removed, id) {
+  const next = { ...removed };
+  delete next[id];
+  return next;
+}
+export function cleanRemoved(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [id, target] of Object.entries(raw)) {
+    const a = CATEGORIES[id], b = CATEGORIES[target];
+    if (a && b && !a.custom && id !== target && a.group === b.group && REMOVABLE_GROUPS.has(a.group) && DEFAULT_CODES[id]) out[id] = target;
+  }
+  // drop anything that would lead round in a circle
+  const looped = Object.keys(out).filter(id => { let at = id, n = 0; while (at in out && n++ < 30) at = out[at]; return at in out; });
+  for (const id of looped) delete out[id];
+  // an account can't be merged into one that no longer exists as a destination
+  for (const id of Object.keys(out)) if (!CATEGORIES[resolveWith(out, id)]) delete out[id];
+  return out;
+}
+const resolveWith = (map, id) => { for (let i = 0; i < 20 && id in map; i++) id = map[id]; return id; };
+export function applyRemoved(removed = {}) { REMOVED = { ...removed }; }
+export const removedList = () => Object.entries(REMOVED).map(([id, to]) => ({ key: id, code: DEFAULT_CODES[id], name: CATEGORIES[id]?.name, into: resolveCategory(id) }))
+  .filter(r => CATEGORIES[r.key]).sort((a, b) => a.code.localeCompare(b.code));
 
 // Customs are [{ id, parent, code, name }]. They become ordinary categories, so every screen treats them like the built-in ones.
 export function cleanCustoms(raw) {
@@ -300,8 +350,8 @@ export function applyCoding(coding = {}) {
 export function codingList(trips = [], coding = {}, names = {}) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
   const rows = [
-    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && (x.group !== 'vacation' || open.has(x.slot)))
-      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), canAddSub: canParent(x.id), custom: !!x.custom })),
+    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
+      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), canAddSub: canParent(x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id) })),
     ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, code: a.code, name: a.name, status: 'Active', editable: false })),

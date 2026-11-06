@@ -165,6 +165,15 @@ server.listen(0, async () => {
   await page.selectOption('#sub-parent', 'save_invest');
   await page.fill('#sub-name', 'Roth IRA'); await page.click('text=Add sub account');
   check('a sub account appears under its parent with the next free number', /Added 1130 Roth IRA/.test(await page.textContent('#settings-body')) && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
+  // delete an account: it merges into another of the same kind, and can be restored
+  await page.click('button[aria-label^="Delete 5220"]');
+  check('delete asks where to move it, and only offers the same kind', (await page.locator('#del-target option').allTextContents()).every(t => /^52/.test(t)));
+  await page.selectOption('#del-target', 'sub_other'); await page.click('text=Delete account');
+  check('a deleted account leaves the list and says where it went', (await page.locator('#code-sub_gym').count()) === 0 && /Deleted 5220/.test(await page.textContent('#settings-body')));
+  check('it shows under Deleted accounts with a Restore button', (await page.locator('button[aria-label^="Restore"]').count()) === 1);
+  await page.click('button[aria-label^="Restore"]');
+  check('Restore brings it back', (await page.locator('#code-sub_gym').count()) === 1);
+  await page.click('button[aria-label^="Delete 5220"]'); await page.selectOption('#del-target', 'sub_other'); await page.click('text=Delete account');
   await closeSheet();
   await goFS('tb');
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
@@ -310,6 +319,7 @@ server.listen(0, async () => {
   check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon'));
   check('TB coding survived', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
   await gear('TB coding');
+  check('the deleted account stayed deleted', (await page.locator('#code-sub_gym').count()) === 0);
   check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
   await closeSheet();
   await page.click('#tab-budget'); await page.click('#plan-details summary');

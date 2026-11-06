@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -22,7 +22,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [],
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], removed: {},
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -65,12 +65,16 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter(Boole
 function recompute() {
   applyCustoms(state.customs);
   applyNames(state.names);
+  state.removed = cleanRemoved(state.removed);
+  applyRemoved(state.removed);
   applyCoding(state.coding);
   applyTripNames(state.trips);
   const auto = assignTrips(categorize(matchTransfers(state.raw)), state.trips);
   state.txs = auto.map(t => {
     const pick = state.overrides[t.id];
-    return pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
+    const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
+    const home = resolveCategory(out.category);
+    return home === out.category ? out : { ...out, category: home };
   }).sort((a, b) => a.date.localeCompare(b.date));
   const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort();
   if (!months.includes(state.ym)) state.ym = defaultMonth(state.txs);
@@ -106,7 +110,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, removed: state.removed, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -115,13 +119,15 @@ function loadSnapshot(d) {
   state.customs = cleanCustoms(d.customs);
   applyCustoms(state.customs);
   state.names = cleanNames(d.names);
+  state.removed = cleanRemoved(d.removed);
+  applyRemoved(state.removed);
   state.coding = cleanCoding(d.coding);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1131,7 +1137,7 @@ const guard = (msgEl, fn) => async (...args) => {
 };
 
 function planFieldDefs() {
-  const idsIn = g => Object.values(CATEGORIES).filter(c => c.group === g).sort((a, b) => a.code.localeCompare(b.code));
+  const idsIn = g => Object.values(CATEGORIES).filter(c => c.group === g && !isRemoved(c.id)).sort((a, b) => a.code.localeCompare(b.code));
   const planned = cat => ({
     id: cat.id, label: `${cat.code} ${cat.name}`,
     get: () => plan.planned?.[cat.id] ?? 0,
@@ -1349,6 +1355,7 @@ function renderOpeningScreen(body) {
     plug, msg);
 }
 
+let removingKey = null;   // the account whose delete panel is open on the TB coding screen
 function renderCodingScreen(body) {
   const msg = h('p', { class: 'msg', role: 'status' });
   const refresh = focusId => { recompute(); render(); markDirty(); renderSettingsScreen(); if (focusId) document.getElementById(focusId)?.focus(); };
@@ -1391,6 +1398,31 @@ function renderCodingScreen(body) {
   };
   subName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
 
+  // Delete = merge: everything filed under the account (and its planned amount) moves into the one you pick.
+  const deletePanel = r => {
+    const targets = removeTargets(r.key);
+    const pick = h('select', { id: 'del-target', 'aria-label': `Move ${r.name} into` }, targets.map(t => h('option', { value: t.key, text: `${t.code} ${t.name}` })));
+    return h('div', { class: 'del-panel' },
+      h('span', { text: `Move everything in ${r.code} ${r.name} into:` }), pick,
+      h('span', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'btn danger small', text: 'Delete account', onclick: () => {
+          try {
+            state.removed = removeAccount(state.removed, r.key, pick.value);
+            if (plan.planned?.[r.key]) {            // its planned amount goes with it
+              const planned = { ...plan.planned };
+              planned[pick.value] = (planned[pick.value] ?? 0) + planned[r.key]; delete planned[r.key];
+              plan = { ...plan, planned };
+            }
+            removingKey = null;
+            refresh();
+            const m = document.querySelector('#settings-body .msg');
+            if (m) { m.className = 'msg'; m.textContent = `Deleted ${r.code} ${r.name}. Everything in it moved to ${CATEGORIES[pick.value].code} ${CATEGORIES[pick.value].name}.`; }
+          } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+        } }),
+        h('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => { removingKey = null; renderSettingsScreen(); } })));
+  };
+  const gone = removedList();
+
   const rows = [];
   for (const cls of [...new Set(list.map(r => r.class))]) {
     rows.push(h('h3', { class: 'set-h', text: cls }));
@@ -1407,6 +1439,8 @@ function renderCodingScreen(body) {
         h('span', { class: 'row-actions' },
           r.canAddSub && h('button', { type: 'button', class: 'btn ghost small', text: '+ Sub', 'aria-label': `Add a sub account under ${r.code} ${r.name}`,
             onclick: () => { parentSel.value = r.key; subName.focus(); subName.scrollIntoView({ block: 'center' }); } }),
+          r.canRemove && h('button', { type: 'button', class: 'btn ghost danger small', text: 'Delete', 'aria-label': `Delete ${r.code} ${r.name}`,
+            onclick: () => { removingKey = removingKey === r.key ? null : r.key; renderSettingsScreen(); } }),
           r.custom
             ? twoStep('Remove', 'Tap again', () => {
                 const out = removeSub(state.customs, r.key);
@@ -1415,10 +1449,11 @@ function renderCodingScreen(body) {
                 refresh();
               }, 'btn ghost danger small')
             : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status }))));
+      if (removingKey === r.key && r.canRemove) rows.push(deletePanel(r));
     }
   }
   body.append(
-    h('p', { class: 'sub', text: 'Rename any account or change its number. Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112.' }),
+    h('p', { class: 'sub', text: 'Rename any account, change its number, or delete it (its transactions move into another account of the same kind, and you can restore it later). Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112.' }),
     msg,
     h('div', { class: 'row-form sub-add' }, parentSel, subName, h('button', { type: 'button', class: 'btn', text: 'Add sub account', onclick: addIt })),
     h('div', {}, rows),
@@ -1426,6 +1461,11 @@ function renderCodingScreen(body) {
       twoStep('Reset numbers and names to the defaults', 'Tap again to reset', () => {
         state.coding = {}; state.names = {}; refresh();
       })),
+    gone.length > 0 && h('div', {}, h('h3', { class: 'set-h', text: 'Deleted accounts' }),
+      gone.map(g => h('div', { class: 'code-row' },
+        h('span', { class: 'code fixed', text: g.code }), h('span', { text: `${g.name} → ${CATEGORIES[g.into].name}` }),
+        h('button', { type: 'button', class: 'btn ghost small', text: 'Restore', 'aria-label': `Restore ${g.name}`,
+          onclick: () => { state.removed = restoreAccount(state.removed, g.key); refresh(); } })))),
     state.customs.length > 0 && h('p', { class: 'note', text: 'Removing a sub account sends anything filed under it back to automatic categories.' }));
 }
 

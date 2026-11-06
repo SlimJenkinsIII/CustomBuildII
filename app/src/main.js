@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -689,6 +689,11 @@ function periodPickers(asOf, id) {
   return h('div', { class: 'row-form' }, month, year);
 }
 
+// Sub accounts sit indented under their parent on every statement.
+const indentLevel = key => (key && CATEGORIES[key] ? depthOf(key) : 0);
+const indentClass = key => (indentLevel(key) ? ' sub-acct' : '');
+const indentStyle = key => (indentLevel(key) ? `--depth:${indentLevel(key)}` : null);
+
 // The three statement pages are drawn together, so a change of year shows on all of them.
 function renderFS(asOf, focusId) {
   renderTrialBalance(asOf);
@@ -727,7 +732,7 @@ function renderTrialBalance(asOf) {
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: r.class }), h('td', { colspan: span })));
       lastClass = r.class;
     }
-    const tr = h('tr', {}, h('td', { class: 'acct' }, h('span', { class: 'code', text: r.code }), r.name));
+    const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, h('span', { class: 'code', text: r.code }), r.name));
     if (bal) tr.append(h('td', { text: whole(r.openBal) }));
     tb.months.forEach((ym, i) => {
       if (!shownMonth(ym)) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
@@ -835,7 +840,7 @@ function renderBalanceSheet(asOf) {
     tr.append(td, h('td', { text: whole(was) }), h('td', { text: whole(cur - was) }));
   };
   const accountRow = group => r => {
-    const tr = h('tr', {}, h('td', { class: 'acct' }, r.code && h('span', { class: 'code', text: r.code }), r.name));
+    const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, r.code && h('span', { class: 'code', text: r.code }), r.name));
     numbers(tr, group, r, null);
     body.append(tr);
   };
@@ -1020,7 +1025,7 @@ function renderMatrix(asOf) {
     }
     if (mo && l.kind === 'running') continue;
     const cls = { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
-    const tr = h('tr', { class: cls }, h('td', { class: 'acct' }, l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label));
+    const tr = h('tr', { class: cls }, h('td', { class: 'acct' + (l.kind === 'row' ? indentClass(l.id) : ''), style: l.kind === 'row' ? indentStyle(l.id) : null }, l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label));
     if (mo) {
       tr.append(m.hasData[mo] ? drillCell(l, mo, l.byMonth[mo]) : h('td', { class: 'empty', text: '·' }), h('td', { class: 'total', text: whole(ytdOf(l)) }));
       body.append(tr);
@@ -1481,7 +1486,7 @@ function renderCodingScreen(body) {
     const digit = list.find(x => x.class === cls).code[0];
     rows.push(h('h3', { class: 'set-h', 'data-drop': 'top', 'data-cls': digit, text: cls }));
     for (const r of list.filter(x => x.class === cls)) {
-      rows.push(h('div', { class: 'code-row' + (r.depth ? ' nested' : '') + (r.editable ? '' : ' dim'), style: r.depth ? `--depth:${r.depth}` : null, ...(r.droppable ? { 'data-drop': r.key } : {}) },
+      rows.push(h('div', { class: 'code-row' + (r.depth ? ' nested' : '') + (r.hasKids ? ' parent' : '') + (r.editable ? '' : ' dim'), style: r.depth ? `--depth:${r.depth}` : null, ...(r.droppable ? { 'data-drop': r.key } : {}) },
         r.movable
           ? h('button', { type: 'button', class: 'grip', 'aria-label': `Drag ${r.code} ${r.name} to move it`, title: 'Drag onto an account to nest it', onpointerdown: e => startDrag(e, r) }, '≡')
           : h('span', { class: 'grip off' }),

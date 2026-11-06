@@ -224,6 +224,18 @@ server.listen(0, async () => {
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
   const tbText = await page.locator('#fs-tb').textContent();
   check('TB Summary heads each group with its parent account', /1000\s*Checking/.test(tbText) && /1200\s*Savings/.test(tbText), 'Checking and Savings head their accounts');
+  await goFS('is');
+  const isRowBy = async (sel, text) => page.locator(`#fs-is tbody tr${sel}`).filter({ hasText: text }).first();
+  const lastCell = async tr => Number((await tr.locator('td').last().textContent()).replace(/[(),\s]/g, '').replace('\u2013', '0'));
+  const parentTotal = await lastCell(await isRowBy('.parent-row', 'Subscriptions')), netflixTotal = await lastCell(await isRowBy('', 'Netflix')), otherTotal = await lastCell(await page.locator('#fs-is tbody tr:has(td.own-line)').first());
+  check('a parent account on the Income Statement is the sum of its sub accounts', parentTotal > 0 && parentTotal === netflixTotal + otherTotal, `${parentTotal} vs ${netflixTotal} + ${otherTotal}`);
+  check('its own money is not hidden: it sits on an (other) line', /\(other\)/.test(await page.locator('#fs-is tbody tr:has(td.own-line)').first().textContent()));
+  await goFS('bs');
+  const bsCells = async tr => (await tr.locator('td').allTextContents()).slice(1).map(t => t.trim());
+  const chk = await bsCells(page.locator('#fs-bs tbody tr.parent-row').filter({ hasText: 'Checking' }).first());
+  const chase = await bsCells(page.locator('#fs-bs tbody tr').filter({ hasText: 'Chase checking' }).first());
+  check('on the Balance Sheet the Checking parent equals the accounts under it', chk.length > 3 && chk.join('|') === chase.join('|'), `${chk.slice(0, 4)} vs ${chase.slice(0, 4)}`);
+  await goFS('tb');
   check('and indents the accounts under them', (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 3);
   await goFS('tb');
   check('TB Summary follows the new number', (await page.locator('#fs-tb').textContent()).includes('5455'));

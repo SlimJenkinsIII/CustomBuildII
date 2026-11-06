@@ -2,6 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
+import { nestRows, addMaps } from './nesting.js';
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
@@ -693,11 +694,10 @@ function periodPickers(asOf, id) {
 const indentLevel = key => (key ? depthOf(key) : 0);
 const indentClass = key => (indentLevel(key) ? ' sub-acct' : '');
 const indentStyle = key => (indentLevel(key) ? `--depth:${indentLevel(key)}` : null);
-const headerRow = (key, span) => h('tr', { class: 'hdr hdr-acct' },
-  h('td', { class: 'acct' + indentClass(key), style: indentStyle(key) }, h('span', { class: 'code', text: CATEGORIES[key].code }), CATEGORIES[key].name), h('td', { colspan: span }));
-const emitHeaders = (body, key, emitted, span) => {
-  for (const k of headersAbove(key)) if (!emitted.has(k)) { emitted.add(k); body.append(headerRow(k, span)); }
-};
+// A parent account's row: bold, with the sum of what is under it. Its own money, if any, sits on an indented "(other)" line.
+const entryRow = (e, extra = '') => h('tr', { class: e.kind === 'parent' ? 'parent-row' : '' },
+  h('td', { class: 'acct' + indentClass(e.key) + (e.kind === 'own' ? ' own-line' : ''), style: e.kind === 'own' ? `--depth:${indentLevel(e.key) + 1}` : indentStyle(e.key) },
+    e.code && h('span', { class: 'code', text: e.code }), e.name));
 
 // The three statement pages are drawn together, so a change of year shows on all of them.
 function renderFS(asOf, focusId) {
@@ -730,29 +730,27 @@ function renderTrialBalance(asOf) {
     h('th', { class: 'total' }, bal ? 'Change in year' : 'Year to date'));
 
   const body = h('tbody');
-  let lastClass = null;
-  let emitted = new Set();
   const span = bal ? 14 : 13;
-  for (const r of shown) {
-    if (r.class !== lastClass) {
-      emitted = new Set();
-      body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: r.class }), h('td', { colspan: span })));
-      lastClass = r.class;
+  const rollupTb = list => ({ openBal: list.reduce((t, r) => t + r.openBal, 0), change: list.reduce((t, r) => t + r.change, 0), total: list.reduce((t, r) => t + r.total, 0),
+    byMonth: addMaps(list.map(r => r.byMonth)), balByMonth: addMaps(list.map(r => r.balByMonth)) });
+  const ownTb = r => r.openBal !== 0 || tb.months.some(ym => r.byMonth[ym] !== 0 || r.balByMonth[ym] !== 0);
+  for (const cls of [...new Set(shown.map(r => r.class))]) {
+    body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: cls }), h('td', { colspan: span })));
+    for (const e of nestRows(shown.filter(r => r.class === cls), { rollup: rollupTb, hasOwn: ownTb })) {
+      const d = e.data, tr = entryRow(e);
+      if (bal) tr.append(h('td', { text: whole(d.openBal) }));
+      tb.months.forEach((ym, i) => {
+        if (!shownMonth(ym)) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
+        const v = cellValue(d, ym), target = e.kind === 'parent' ? null : drillFor(d, ym), td = h('td');
+        if (v !== 0 && target) {
+          td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
+            'aria-label': `${e.code || d.code} ${e.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+        } else td.textContent = whole(v);
+        tr.append(td);
+      });
+      tr.append(h('td', { class: 'total', text: whole(bal ? d.change : d.total) }));
+      body.append(tr);
     }
-    emitHeaders(body, r.key, emitted, span);
-    const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, h('span', { class: 'code', text: r.code }), r.name));
-    if (bal) tr.append(h('td', { text: whole(r.openBal) }));
-    tb.months.forEach((ym, i) => {
-      if (!shownMonth(ym)) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
-      const v = cellValue(r, ym), target = drillFor(r, ym), td = h('td');
-      if (v !== 0 && target) {
-        td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
-          'aria-label': `${r.code} ${r.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
-      } else td.textContent = whole(v);
-      tr.append(td);
-    });
-    tr.append(h('td', { class: 'total', text: whole(bal ? r.change : r.total) }));
-    body.append(tr);
   }
   const totalRow = (label, pick, openPick, ytd, cls) => {
     const tr = h('tr', { class: cls }, h('td', { class: 'acct', text: label }));
@@ -821,57 +819,62 @@ function renderBalanceSheet(asOf) {
 
   const body = h('tbody');
   const dot = () => h('td', { class: 'empty', text: '·' });
-  let emitted = new Set();
-  const header = label => { emitted = new Set(); body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: span }))); };
+  const header = label => body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: span })));
   // One line of numbers: either the whole year across, or the month against the month before.
-  const numbers = (tr, group, r, t) => {
-    const src = r ?? t;
+  // drillOk lets a number open its transactions; sums and totals don't.
+  const numbers = (tr, src, was, drillOk) => {
     if (!mo) {
       tr.append(h('td', { text: whole(src.open) }));
       bs.months.forEach((ym, i) => {
         if (!shown(ym)) { tr.append(dot()); return; }
-        const v = src.byMonth[ym], target = r && drillFor(r, ym), td = h('td');
-        if (r && v !== 0 && target) {
+        const v = src.byMonth[ym], target = drillOk && drillFor(src, ym), td = h('td');
+        if (v !== 0 && target) {
           td.append(h('button', { type: 'button', class: 'cell', text: whole(v),
-            'aria-label': `${r.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+            'aria-label': `${src.name}, ${MONTH_ABBR[i]}: ${money(v)}. Show this month’s transactions.`, onclick: () => drill(target) }));
         } else td.textContent = whole(v);
         tr.append(td);
       });
       return;
     }
-    const cur = src.byMonth[mo], was = prior(group, r);
+    const cur = src.byMonth[mo];
     if (!shown(mo)) { tr.append(dot(), dot(), dot()); return; }
-    const target = r && drillFor(r, mo), td = h('td');
-    if (r && cur !== 0 && target) {
+    const target = drillOk && drillFor(src, mo), td = h('td');
+    if (v0(cur) && target) {
       td.append(h('button', { type: 'button', class: 'cell', text: whole(cur),
-        'aria-label': `${r.name}, ${MONTH_ABBR[mi]}: ${money(cur)}. Show this month’s transactions.`, onclick: () => drill(target) }));
+        'aria-label': `${src.name}, ${MONTH_ABBR[mi]}: ${money(cur)}. Show this month’s transactions.`, onclick: () => drill(target) }));
     } else td.textContent = whole(cur);
     tr.append(td, h('td', { text: whole(was) }), h('td', { text: whole(cur - was) }));
   };
-  const accountRow = group => r => {
-    emitHeaders(body, r.key, emitted, span);
-    const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, r.code && h('span', { class: 'code', text: r.code }), r.name));
-    numbers(tr, group, r, null);
-    body.append(tr);
+  const v0 = v => v !== 0;
+  // A section's accounts: parents first with the sum of what is under them, then their sub accounts, indented.
+  const sectionRows = (group, rows) => {
+    const withWas = rows.map(r => ({ ...r, was: mo ? prior(group, r) : 0 }));
+    const rollup = list => ({ open: list.reduce((t, r) => t + r.open, 0), was: list.reduce((t, r) => t + r.was, 0), byMonth: addMaps(list.map(r => r.byMonth)) });
+    const hasOwn = r => r.open !== 0 || bs.months.some(ym => r.byMonth[ym] !== 0);
+    for (const e of nestRows(withWas, { rollup, hasOwn })) {
+      const tr = entryRow(e);
+      numbers(tr, e.data, e.data.was, e.kind !== 'parent');
+      body.append(tr);
+    }
   };
   const totalRow = (label, group, t, cls) => {
     const tr = h('tr', { class: cls }, h('td', { class: 'acct', text: label }));
-    numbers(tr, group, null, t);
+    numbers(tr, t, mo ? prior(group, null) : 0, false);
     body.append(tr);
   };
 
   header('Assets');
-  bs.assets.rows.forEach(accountRow('assets'));
+  sectionRows('assets', bs.assets.rows);
   totalRow('Total assets', 'assets', bs.assets, 'tot');
   if (bs.liabilities.rows.length) {
     header('Liabilities');
-    bs.liabilities.rows.forEach(accountRow('liabilities'));
+    sectionRows('liabilities', bs.liabilities.rows);
     totalRow('Total liabilities', 'liabilities', bs.liabilities, 'tot');
   }
   header('Equity');
-  bs.equity.rows.forEach(accountRow('equity'));
+  sectionRows('equity', bs.equity.rows);
   const earnings = h('tr', {}, h('td', { class: 'acct', text: 'Current year earnings' }));
-  numbers(earnings, 'earnings', null, { open: 0, byMonth: bs.equity.earnings.byMonth });
+  numbers(earnings, { open: 0, byMonth: bs.equity.earnings.byMonth, name: 'Current year earnings' }, mo ? prior('earnings', null) : 0, false);
   body.append(earnings);
   totalRow('Total equity', 'equity', bs.equity, 'tot');
   totalRow('Total liabilities & equity', 'liabilitiesAndEquity', bs.liabilitiesAndEquity, 'tot2');
@@ -1020,7 +1023,6 @@ function renderMatrix(asOf) {
 
   const body = h('tbody');
   const span = mo ? 3 : 14;
-  let emitted = new Set();
   const drillCell = (l, ym, v) => {
     const td = h('td');
     if (l.kind === 'row' && v !== 0) {
@@ -1029,24 +1031,22 @@ function renderMatrix(asOf) {
     } else td.textContent = whole(v);
     return td;
   };
-  for (const l of m.lines) {
-    if (l.kind === 'header') {
-      emitted = new Set();
-      body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
-      continue;
-    }
-    if (mo && l.kind === 'running') continue;
-    if (l.kind === 'row') emitHeaders(body, l.id, emitted, span);
-    const cls = { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
-    const tr = h('tr', { class: cls }, h('td', { class: 'acct' + (l.kind === 'row' ? indentClass(l.id) : ''), style: l.kind === 'row' ? indentStyle(l.id) : null }, l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label));
+  // One line of the statement. entry (optional) says it is a parent's sum or an "(other)" line, which changes how the label looks.
+  const lineRow = (l, entry) => {
+    const cls = entry ? (entry.kind === 'parent' ? 'parent-row' : '') : { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
+    const label = entry ? [entry.code && h('span', { class: 'code', text: entry.code }), entry.name] : [l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label];
+    const key = entry?.key ?? (l.kind === 'row' ? l.id : null);
+    const own = entry?.kind === 'own';
+    const tr = h('tr', { class: cls }, h('td', { class: 'acct' + (key ? indentClass(key) : '') + (own ? ' own-line' : ''),
+      style: key ? (own ? `--depth:${indentLevel(key) + 1}` : indentStyle(key)) : null }, label));
     if (mo) {
       tr.append(m.hasData[mo] ? drillCell(l, mo, l.byMonth[mo]) : h('td', { class: 'empty', text: '·' }), h('td', { class: 'total', text: whole(ytdOf(l)) }));
       body.append(tr);
-      continue;
+      return;
     }
     m.months.forEach(ym => {
       const v = l.byMonth[ym];
-      if (v === null || (!m.hasData[ym])) { tr.append(h('td', { class: 'empty', text: '·' })); return; }
+      if (v === null || (!m.hasData[ym])) { tr.append(h('td', { class: 'empty', text: '\u00b7' })); return; }
       let tone = '';
       if (l.kind === 'row' && l.group !== 'income' && m.fullMonthCount >= 3 && !isPartial(ym) && l.avg > 0) {
         const off = v - l.avg;
@@ -1059,6 +1059,19 @@ function renderMatrix(asOf) {
     if (l.kind === 'running') { tr.append(h('td', { class: 'avg' }), h('td', { class: 'total' })); }
     else { tr.append(h('td', { class: 'avg', text: whole(l.avg) }), h('td', { class: 'total', text: whole(l.total) })); }
     body.append(tr);
+  };
+  const rollupIs = list => ({ kind: 'sum', byMonth: addMaps(list.map(r => r.byMonth)), total: list.reduce((t, r) => t + r.total, 0), avg: list.reduce((t, r) => t + r.avg, 0) });
+  for (let i = 0; i < m.lines.length; i++) {
+    const l = m.lines[i];
+    if (l.kind === 'header') {
+      body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
+      const rows = [];
+      while (m.lines[i + 1]?.kind === 'row') rows.push({ ...m.lines[++i], key: m.lines[i].id });
+      for (const e of nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 })) lineRow(e.kind === 'parent' ? e.data : e.data, e);
+      continue;
+    }
+    if (mo && l.kind === 'running') continue;
+    lineRow(l, null);
   }
 
   fill($('fs-is'),

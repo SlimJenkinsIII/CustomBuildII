@@ -3,6 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
@@ -1915,7 +1916,35 @@ async function boot() {
   recompute();
   render();
 }
-boot();
+// The front door: on a site built with an access code, nothing else starts until the right code is entered.
+async function openDoorThenBoot() {
+  const spec = parseAccess(document.querySelector('meta[name="app-access"]')?.getAttribute('content'));
+  if (!spec || !document.documentElement.hasAttribute('data-gated')) { boot(); return; }
+  $('gate').hidden = false;
+  const form = $('gate-form'), input = $('gate-code'), msg = $('gate-msg'), btn = $('gate-btn');
+  let misses = 0;
+  input.focus();
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = 'Checking…';
+    let ok = false;
+    try { ok = await checkCode(input.value, spec); } catch { ok = false; }
+    if (ok) {
+      try { localStorage.setItem(ACCESS_FLAG, fingerprint(spec)); } catch { /* it just asks again next time */ }
+      document.documentElement.removeAttribute('data-gated');
+      document.title = 'My Budget';
+      input.value = ''; $('gate').hidden = true;
+      boot();
+      return;
+    }
+    misses++;
+    msg.className = 'msg error'; msg.textContent = 'That isn’t right.';
+    input.value = '';
+    await new Promise(r => setTimeout(r, Math.min(8000, 1000 * misses)));        // a little slower with each wrong try
+    btn.disabled = false; input.focus();
+  }, { once: false });
+}
+openDoorThenBoot();
 
 // Ask the browser to keep the app files fresh (see sw.js). Without it the app still works; updates just arrive a little later.
 if (!PREVIEW && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { /* private windows and old browsers: carry on */ });

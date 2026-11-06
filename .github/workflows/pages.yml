@@ -35,6 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/build-site.sh
+        env:
+          ACCESS_CODE: ${{ secrets.ACCESS_CODE }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

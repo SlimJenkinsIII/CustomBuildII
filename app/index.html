@@ -16,11 +16,13 @@
   <!-- Don't tell other sites where you came from, and ask search engines not to list this page. -->
   <meta name="referrer" content="no-referrer">
   <meta name="app-build" content="dev">
+  <meta name="app-access" content="">
   <meta name="robots" content="noindex, nofollow">
   <!-- Clickjacking guard: hidden until src/frameguard.js confirms this page is not inside someone else's frame. -->
   <style id="antiframe">html { display: none; }</style>
   <noscript><style>html { display: block !important; }</style></noscript>
   <script src="src/frameguard.js"></script>
+  <script src="src/early.js"></script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -257,6 +259,14 @@
     td.acct.own-line { padding-left: calc(10px + var(--depth, 1) * 18px); font-style: italic; font-weight: 400; }
     table.mx tr.hdr-acct td { font-weight: 600; font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--ink); background: transparent; }
     .sub-add select, .sub-add input { max-width: 100%; }
+    /* the front door: while it is closed, the app is not shown at all */
+    html[data-gated] body > *:not(#gate):not(script) { display: none !important; }
+    #gate { min-height: 80vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    html:not([data-gated]) #gate { display: none; }
+    #gate form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
+    #gate h1 { margin: 0; font-size: 24px; }
+    #gate .gate-sub { margin: 0; color: var(--ink-2); font-size: 14px; }
+    #gate input[type=password] { font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); text-align: center; }
     .code-row.dim { opacity: .5; }
     .pair-code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; flex: 1 1 100%; padding: 8px 10px; background: var(--bg); border-radius: 8px; }
     .stack { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
@@ -330,6 +340,16 @@
   </style>
 </head>
 <body>
+  <section id="gate" hidden aria-labelledby="gate-title">
+    <form id="gate-form" autocomplete="on">
+      <h1 id="gate-title">Private</h1>
+      <p class="gate-sub">Enter the access code to continue.</p>
+      <input type="text" name="username" autocomplete="username" value="access" hidden>
+      <input type="password" id="gate-code" name="password" autocomplete="current-password" placeholder="Access code" aria-label="Access code" required>
+      <button class="btn" type="submit" id="gate-btn">Continue</button>
+      <p class="msg" id="gate-msg" role="status"></p>
+    </form>
+  </section>
   <noscript><p style="padding:16px">This app needs JavaScript to run.</p></noscript>
   <main>
     <header class="top">

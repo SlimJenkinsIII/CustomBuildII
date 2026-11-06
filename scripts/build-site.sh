@@ -9,5 +9,7 @@ cp samples/FAKE-*.csv _site/samples/        # made-up statements, for trying the
 # stamp the build, so Settings can show which version a device is running
 BUILD="$(echo "${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo dev)}" | cut -c1-7)"
 sed -i "s|<meta name=\"app-build\" content=\"dev\">|<meta name=\"app-build\" content=\"$BUILD\">|" _site/index.html
+# if an access code was provided (a GitHub secret), put the front door on the site
+node scripts/stamp-access.mjs _site/index.html
 touch _site/.nojekyll
 echo "Built _site with $(find _site -type f | wc -l) files."

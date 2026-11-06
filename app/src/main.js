@@ -1670,3 +1670,6 @@ async function boot() {
   render();
 }
 boot();
+
+// Ask the browser to keep the app files fresh (see sw.js). Without it the app still works; updates just arrive a little later.
+if (!PREVIEW && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { /* private windows and old browsers: carry on */ });

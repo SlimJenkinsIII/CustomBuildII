@@ -347,6 +347,10 @@ server.listen(0, async () => {
   const stored = await envelopeText();
   check('stored data is unreadable', !/WHOLEFDS|MAGNOLIA|AUSTIN|Lisbon|5455/i.test(stored) && stored.includes('"app":"my-budget"'), `(${stored.length} bytes)`);
 
+  // ---------- keeps itself up to date ----------
+  const sw = await page.evaluate(async () => { const r = await navigator.serviceWorker?.getRegistration(); return !!r; });
+  check('the app registers its same-site update helper', sw === true);
+
   // ---------- reload -> locked ----------
   await page.reload();
   await page.waitForSelector('#lock:not([hidden])');

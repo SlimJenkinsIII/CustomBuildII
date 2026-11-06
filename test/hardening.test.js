@@ -53,3 +53,12 @@ test('GitHub is asked to keep the workflow\'s tools up to date, by pull request'
   assert.match(d, /package-ecosystem:\s*"github-actions"/);
   assert.match(d, /interval:\s*"weekly"/);
 });
+
+test('the update helper only fetches this site\'s own files, GET only, and stores no data', () => {
+  const sw = readFileSync(new URL('../app/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /self\.location\.origin/);
+  assert.match(sw, /req\.method !== 'GET'/);
+  assert.doesNotMatch(sw, /https?:\/\//);
+  assert.doesNotMatch(sw, /indexedDB|localStorage|postMessage|WebSocket|sendBeacon|POST/);
+  assert.equal((sw.match(/fetch\(/g) ?? []).length, 1);          // the one fetch of a same-site file
+});

@@ -180,9 +180,12 @@ server.listen(0, async () => {
     await page.mouse.move(to.x + 40, to.y + to.height / 2, { steps: 8 });
     await page.mouse.up();
   };
-  await page.fill('#acct-name', 'Netflix'); await page.selectOption('#acct-kind', 'subscriptions'); await page.fill('#acct-match', 'netflix'); await page.click('button:has-text("Add account")');
+  check('the top of TB coding is just a New account button', (await page.locator('#new-account').count()) === 1 && (await page.locator('#acct-name').count()) === 0 && (await page.locator('#sub-parent').count()) === 0);
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Netflix'); await page.selectOption('#acct-kind', 'subscriptions'); await page.fill('#acct-match', 'netflix'); await page.click('#settings-body .sub-add button:text-is("Add")');
   check('a new account takes the next free hundred', /Added 5300 Netflix/.test(await page.textContent('#settings-body')));
-  await page.fill('#acct-name', 'Roth IRA'); await page.selectOption('#acct-kind', 'savings'); await page.click('button:has-text("Add account")');
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Roth IRA'); await page.selectOption('#acct-kind', 'savings'); await page.click('#settings-body .sub-add button:text-is("Add")');
   check('assets get their own next hundred', /Added 1400 Roth IRA/.test(await page.textContent('#settings-body')));
   check('there is no button to add a sub account at the top', (await page.locator('#sub-parent').count()) === 0);
   const netflixId = await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id');
@@ -201,15 +204,12 @@ server.listen(0, async () => {
   await drag(`#settings-body .grip[aria-label^="Drag 5300"]`, '#settings-body .code-row[data-drop="sub_streaming"]');
   check('and it can go back under Subscriptions', (await page.inputValue(`#code-${netflixKey}`)) === '5230');
 
-  // delete an account: it merges into another of the same kind, and can be restored
+  // delete an account: it merges into another of the same kind
   await page.click('button[aria-label^="Delete 5220"]');
   check('delete asks where to move it, and only offers the same kind', (await page.locator('#del-target option').allTextContents()).every(t => /^52/.test(t)));
   await page.selectOption('#del-target', 'sub_other'); await page.click('button:has-text("Delete account")');
   check('a deleted account leaves the list and says where it went', (await page.locator('#code-sub_gym').count()) === 0 && /Deleted 5220/.test(await page.textContent('#settings-body')));
-  check('it shows under Deleted accounts with a Restore button', (await page.locator('button[aria-label^="Restore"]').count()) === 1);
-  await page.click('button[aria-label^="Restore"]');
-  check('Restore brings it back', (await page.locator('#code-sub_gym').count()) === 1);
-  await page.click('button[aria-label^="Delete 5220"]'); await page.selectOption('#del-target', 'sub_other'); await page.click('button:has-text("Delete account")');
+  check('there is no Deleted accounts list to clutter the screen', !/Deleted accounts/.test(await page.textContent('#settings-body')) && (await page.locator('button[aria-label^="Restore"]').count()) === 0);
   await closeSheet();
   await goFS('tb');
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));

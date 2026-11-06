@@ -1317,6 +1317,9 @@ function renderHomeScreen(body) {
     asking && h('form', { class: 'row-form', style: 'margin-top:10px', onsubmit: e => { e.preventDefault(); guard(msg, () => disableDemo($('demo-pass').value))(); } },
       h('input', { id: 'demo-pass', type: 'password', autocomplete: 'current-password', placeholder: 'Your passphrase', 'aria-label': 'Passphrase' }),
       h('button', { class: 'btn', type: 'submit', text: 'Show my data' })),
+    h('div', { class: 'version-row' },
+      h('span', { class: 'sub', id: 'app-version', text: `Version ${document.querySelector('meta[name="app-build"]')?.content ?? 'dev'}` }),
+      h('button', { type: 'button', class: 'btn ghost small', id: 'reload-app', text: 'Reload app', onclick: () => location.reload() })),
     msg].filter(Boolean));
 }
 
@@ -1360,6 +1363,7 @@ function renderOpeningScreen(body) {
 }
 
 let removingKey = null;   // the account whose delete panel is open on the TB coding screen
+let addingAccount = false;   // whether the New account form is open
 function renderCodingScreen(body) {
   const msg = h('p', { class: 'msg', role: 'status' });
   const refresh = focusId => { recompute(); render(); markDirty(); renderSettingsScreen(); if (focusId) document.getElementById(focusId)?.focus(); };
@@ -1396,10 +1400,10 @@ function renderCodingScreen(body) {
       const out = addAccount(state.customs, state.coding, kindSel.value, acctName.value, acctMatch.value);
       state.customs = out.customs;
       const name = acctName.value.trim();
+      addingAccount = false;
       recompute(); render(); markDirty(); renderSettingsScreen();
       say(`Added ${out.code} ${name}. Drag its ≡ handle onto an account to put it underneath.`);
-      document.getElementById('acct-name')?.focus();
-    } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+          } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
   };
   for (const el of [acctName, acctMatch]) el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
 
@@ -1471,14 +1475,13 @@ function renderCodingScreen(body) {
         } }),
         h('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => { removingKey = null; renderSettingsScreen(); } })));
   };
-  const gone = removedList();
 
   const rows = [];
   for (const cls of [...new Set(list.map(r => r.class))]) {
     const digit = list.find(x => x.class === cls).code[0];
     rows.push(h('h3', { class: 'set-h', 'data-drop': 'top', 'data-cls': digit, text: cls }));
     for (const r of list.filter(x => x.class === cls)) {
-      rows.push(h('div', { class: 'code-row' + (r.depth ? ' nested' : ''), style: r.depth ? `--depth:${r.depth}` : null, ...(r.droppable ? { 'data-drop': r.key } : {}) },
+      rows.push(h('div', { class: 'code-row' + (r.depth ? ' nested' : '') + (r.editable ? '' : ' dim'), style: r.depth ? `--depth:${r.depth}` : null, ...(r.droppable ? { 'data-drop': r.key } : {}) },
         r.movable
           ? h('button', { type: 'button', class: 'grip', 'aria-label': `Drag ${r.code} ${r.name} to move it`, title: 'Drag onto an account to nest it', onpointerdown: e => startDrag(e, r) }, '≡')
           : h('span', { class: 'grip off' }),
@@ -1500,7 +1503,7 @@ function renderCodingScreen(body) {
                 for (const [tid, cat] of Object.entries(state.overrides)) if (out.removed.includes(cat)) delete state.overrides[tid];
                 refresh();
               }, 'btn ghost danger small')
-            : (r.canRemove ? null : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status })))));
+            : null)));
       if (r.custom) {
         const mine = state.customs.find(x => x.id === r.key);
         rows.push(h('div', { class: 'match-row' + (r.depth ? ' nested' : ''), style: r.depth ? `--depth:${r.depth}` : null },
@@ -1512,18 +1515,17 @@ function renderCodingScreen(body) {
     }
   }
   body.append(
-    h('p', { class: 'sub', text: 'Add an account, then drag its ≡ handle onto another account to tuck it underneath. Standard accounts count in hundreds (5100, 5200…), sub accounts in tens (5110, 5120…), and the level below that in twos (5112, 5114…). Rename anything, delete accounts you don’t use (their transactions move into another one), and give an account some words, like NETFLIX, to file matching charges there automatically.' }),
+    h('p', { class: 'sub', text: 'Add an account, then drag its ≡ handle onto another account to tuck it underneath. Standard accounts count in hundreds (5100, 5200…), sub accounts in tens (5110, 5120…), and the level below that in twos (5112, 5114…). Rename anything, delete accounts you don’t use (their transactions move into another one; Reset brings them all back), and give an account some words, like NETFLIX, to file matching charges there automatically.' }),
     msg,
-    h('div', { class: 'row-form sub-add' }, acctName, kindSel, acctMatch, h('button', { type: 'button', class: 'btn', text: 'Add account', onclick: addIt })),
+    addingAccount
+      ? h('div', { class: 'row-form sub-add' }, acctName, kindSel, acctMatch,
+          h('button', { type: 'button', class: 'btn', text: 'Add', onclick: addIt }),
+          h('button', { type: 'button', class: 'btn ghost', text: 'Cancel', onclick: () => { addingAccount = false; renderSettingsScreen(); } }))
+      : h('div', { class: 'row-form sub-add' }, h('button', { type: 'button', class: 'btn', id: 'new-account', text: 'New account', onclick: () => { addingAccount = true; renderSettingsScreen(); document.getElementById('acct-name')?.focus(); } })),
     h('div', {}, rows),
-    gone.length > 0 && h('div', {}, h('h3', { class: 'set-h', text: 'Deleted accounts' }),
-      gone.map(g => h('div', { class: 'code-row plain' },
-        h('span', { class: 'code fixed', text: g.code }), h('span', { text: `${g.name} → ${CATEGORIES[g.into].name}` }),
-        h('button', { type: 'button', class: 'btn ghost small', text: 'Restore', 'aria-label': `Restore ${g.name}`,
-          onclick: () => { state.removed = restoreAccount(state.removed, g.key); refresh(); } })))),
     h('div', { class: 'row-form', style: 'margin-top:12px' },
-      twoStep('Reset numbers, names and nesting to the defaults', 'Tap again to reset', () => {
-        state.coding = {}; state.names = {}; state.parents = {}; refresh();
+      twoStep('Reset everything to the defaults', 'Tap again to reset', () => {
+        state.coding = {}; state.names = {}; state.parents = {}; state.removed = {}; refresh();
       })));
 }
 

@@ -13,6 +13,7 @@
         content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
   <!-- Don't tell other sites where you came from, and ask search engines not to list this page. -->
   <meta name="referrer" content="no-referrer">
+  <meta name="app-build" content="dev">
   <meta name="robots" content="noindex, nofollow">
   <!-- Clickjacking guard: hidden until src/frameguard.js confirms this page is not inside someone else's frame. -->
   <style id="antiframe">html { display: none; }</style>
@@ -243,6 +244,8 @@
     .drop-ok { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 10px; background: color-mix(in srgb, var(--blue) 10%, transparent); }
     .drop-no { outline: 2px dashed var(--red); outline-offset: 1px; border-radius: 10px; }
     h3.set-h[data-drop] { padding: 4px 6px; margin-left: -6px; }
+    .code-row.dim { opacity: .5; }
+    .version-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
     .del-panel { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 8px 10px; margin: 2px 0 6px 84px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
     .del-panel select { max-width: 100%; }
     .sub-add select { flex: 1 1 100%; min-width: 0; max-width: 100%; }

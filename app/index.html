@@ -5,12 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <!--
     PRIVACY RULE (enforced by the browser, not by the app):
-    connect-src 'none'  -> the page may not contact ANY server (no fetch, no uploads, no tracking).
+    connect-src https://sync.millhaus.app -> the page may contact exactly ONE address: your own sync server, and only
+                          if you turn sync on. It receives data that was already encrypted on your device. No other
+                          server can be reached (no tracking, no uploads, nothing else).
     default-src 'self'  -> only files from this same site may load; no outside scripts, fonts or images.
     Do not weaken this line. scripts/check-privacy.sh fails if it changes.
   -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+        content="default-src 'self'; connect-src https://sync.millhaus.app; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
   <!-- Don't tell other sites where you came from, and ask search engines not to list this page. -->
   <meta name="referrer" content="no-referrer">
   <meta name="app-build" content="dev">
@@ -256,6 +258,8 @@
     table.mx tr.hdr-acct td { font-weight: 600; font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--ink); background: transparent; }
     .sub-add select, .sub-add input { max-width: 100%; }
     .code-row.dim { opacity: .5; }
+    .pair-code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; flex: 1 1 100%; padding: 8px 10px; background: var(--bg); border-radius: 8px; }
+    .stack { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
     .version-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
     .del-panel { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 8px 10px; margin: 2px 0 6px 84px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
     .del-panel select { max-width: 100%; }
@@ -375,6 +379,7 @@
         <button class="tab" role="tab" id="tab-fs" aria-selected="false" aria-controls="panel-fs" type="button">F/S</button>
         <button class="tab" role="tab" id="tab-tie" aria-selected="false" aria-controls="panel-tie" type="button">Tie-out</button>
       </div>
+      <div class="notice" id="syncbanner" hidden></div>
       <div class="notice" id="savebanner" hidden>
         <span>Your data isn't saved yet. Set a passphrase to keep it on this device.</span>
         <button class="btn" type="button" id="banner-btn">Set passphrase</button>

@@ -19,3 +19,7 @@ data only (the app shows a warning there). Real statements go on your own domain
 
 `SITE_DIR=_site E2E_PREFIX=/your-repo-name/ npm run e2e` runs the browser test against the assembled site, served under a subfolder the
 way GitHub serves it. `test-files.html` in the published site is for trying the importers on a device and can be removed later.
+
+
+## Sync between devices (optional)
+Your data lives on each device, encrypted with your passphrase. To keep two devices in step, set up the small sync server in `sync/` (see `sync/README.md`), then use Settings → Sync. The server only ever holds data that was already encrypted on your device. The page is allowed to contact that one address and nothing else.

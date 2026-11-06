@@ -58,3 +58,18 @@ export async function unlock(envelope, passphrase) {
   }
   return { vault: { key, salt, iterations: envelope.iter }, data: JSON.parse(decoder.decode(plain)) };
 }
+
+// Opens an envelope with a vault that is already unlocked (same passphrase, same salt), without asking again.
+// Used when another of your devices saved: it was sealed with the same key. If the salt differs it was made
+// with a different passphrase set-up, and the passphrase is needed instead.
+export async function openWith(vault, envelope) {
+  if (!looksLikeEnvelope(envelope)) throw new Error('This is not a My Budget backup.');
+  if (envelope.salt !== toB64(vault.salt) || envelope.iter !== vault.iterations) throw Object.assign(new Error('needs-passphrase'), { needsPassphrase: true });
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(envelope.iv) }, vault.key, fromB64(envelope.data));
+  } catch {
+    throw new Error('Wrong passphrase, or the data is damaged.');
+  }
+  return JSON.parse(decoder.decode(plain));
+}

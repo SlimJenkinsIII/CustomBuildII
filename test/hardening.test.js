@@ -8,7 +8,7 @@ const head = html.slice(0, html.indexOf('<body>'));
 
 test('the connection and framing rules are all in the page head, ahead of any script', () => {
   const csp = head.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)[1];
-  for (const rule of ["default-src 'self'", "connect-src 'none'", "script-src 'self'", "object-src 'none'", "frame-src 'none'", "form-action 'none'", "base-uri 'none'"]) {
+  for (const rule of ["default-src 'self'", "connect-src https://sync.millhaus.app", "script-src 'self'", "object-src 'none'", "frame-src 'none'", "form-action 'none'", "base-uri 'none'"]) {
     assert.ok(csp.includes(rule), rule);
   }
   assert.ok(!csp.includes('unsafe-eval'));
@@ -61,4 +61,24 @@ test('the update helper only fetches this site\'s own files, GET only, and store
   assert.doesNotMatch(sw, /https?:\/\//);
   assert.doesNotMatch(sw, /indexedDB|localStorage|postMessage|WebSocket|sendBeacon|POST/);
   assert.equal((sw.match(/fetch\(/g) ?? []).length, 1);          // the one fetch of a same-site file
+});
+
+test('the page may reach one address only (the sync server), and only the sync file makes network calls', () => {
+  const html = read('app/index.html');
+  const csp = /Content-Security-Policy"\s+content="([^"]+)"/.exec(html)[1];
+  const connect = csp.split(';').map(x => x.trim()).filter(x => x.startsWith('connect-src'));
+  assert.equal(connect.length, 1);
+  assert.deepEqual(connect[0].split(/\s+/).slice(1), ['https://sync.millhaus.app']);        // one origin, no wildcards, no 'self'
+  const sync = read('app/src/sync.js');
+  assert.match(sync, /SYNC_ORIGIN = 'https:\/\/sync\.millhaus\.app'/);                    // the CSP and the code agree
+  for (const f of ['main.js', 'storage.js', 'vault.js', 'journal.js', 'insights.js', 'budget.js', 'rules.js', 'parsers.js', 'host.js', 'nesting.js', 'categories.js', 'dummy.js']) {
+    assert.doesNotMatch(read(`app/src/${f}`), /fetch\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource/, `${f} must not make network calls`);
+  }
+  assert.equal((sync.match(/fetch\(/g) ?? []).length, 1);                                    // the one call, which goes through createSyncClient
+  assert.doesNotMatch(sync, /XMLHttpRequest|WebSocket|sendBeacon|EventSource/);
+});
+
+test('the sync client sends only encrypted data: it never sees a passphrase or a key', () => {
+  const sync = read('app/src/sync.js');
+  assert.doesNotMatch(sync, /deriveKey|importKey|crypto\.subtle|passphrase\s*[=:(]/);
 });

@@ -3,12 +3,13 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
 import { trialBalance, balanceSheet, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
-import { createVault, seal, unlock } from './vault.js';
+import { createVault, seal, unlock, openWith } from './vault.js';
 import { memoryStorage, indexedDbStorage } from './storage.js';
 import { samplePlan } from './plan.sample.js';
 import { isTestAddress } from './host.js';
@@ -23,7 +24,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {},
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -113,7 +114,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -127,12 +128,13 @@ function loadSnapshot(d) {
   state.parents = cleanParents(d.parents);
   applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
+  state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -140,14 +142,17 @@ function clearMemory() {
 let saveTimer = null;
 let saveChain = Promise.resolve();
 function markDirty() {
-  if (state.vault && !state.demo) { state.save = 'pending'; clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 300); }
+  if (state.vault && !state.demo) {
+    state.save = 'pending'; clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 300);
+    if (state.sync) { editSeq++; lsSet(DIRTY_KEY, '1'); }      // changed since the last time devices were in step
+  }
   renderSaveState();
 }
 function flushSave() {
   clearTimeout(saveTimer);
   if (!state.vault || state.demo || state.save !== 'pending') return saveChain;   // nothing changed, nothing to write
   saveChain = saveChain.then(async () => {
-    try { await storage.save(await seal(state.vault, snapshot())); state.save = 'saved'; }
+    try { await storage.save(await seal(state.vault, snapshot())); state.save = 'saved'; if (state.sync) syncSoon(); }
     catch { state.save = 'error'; }
     renderSaveState();
   });
@@ -161,7 +166,7 @@ function renderSaveState() {
   if (state.demo) text = PREVIEW ? 'Preview · dummy numbers on' : 'Dummy numbers on';
   else if (PREVIEW) text = 'Preview: nothing is saved';
   else if (state.locked) text = 'Locked';
-  else if (state.vault) text = { pending: 'Saving…', saved: 'Saved on this device', idle: 'Saved on this device', error: "Couldn't save. Download a backup." }[state.save];
+  else if (state.vault) text = { pending: 'Saving…', saved: 'Saved on this device', idle: 'Saved on this device', error: "Couldn't save. Download a backup." }[state.save] + syncChip();
   else if (state.raw.length) text = 'Not saved yet';
   const chip = $('savechip');
   chip.textContent = text;
@@ -169,6 +174,167 @@ function renderSaveState() {
   chip.className = 'savechip' + (state.demo ? ' demo' : state.save === 'error' || (!PREVIEW && !state.vault && state.raw.length) ? ' warn' : '');
   $('savebanner').hidden = PREVIEW || state.demo || !!state.vault || state.locked || !state.raw.length;
 }
+
+// ---------- sync between your devices ----------
+// Your data is encrypted on this device and only that encrypted copy goes to your own sync server (see sync.js).
+// This device remembers the revision it last synced and whether it has changed since; those two facts are not secret.
+const REV_KEY = 'my-budget-sync-rev', DIRTY_KEY = 'my-budget-sync-dirty';
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* storage unavailable: sync just starts over next time */ } };
+const baseRev = () => Number(lsGet(REV_KEY) ?? 0) || 0;
+let editSeq = 0, syncTimer = null, syncRunning = null, lastSyncTry = 0;
+const syncStatus = { busy: false, at: null, error: '', conflict: null, rollback: null };
+
+const syncChip = () => {
+  if (!state.sync) return '';
+  if (syncStatus.busy) return ' · syncing…';
+  if (syncStatus.conflict) return ' · needs your choice';
+  if (syncStatus.error) return ' · sync problem';
+  return syncStatus.at ? ' · synced' : '';
+};
+function renderSyncUi() {
+  renderSaveState();
+  renderSyncBanner();
+  if (!$('settings').hidden && state.settingsScreen === 'sync') renderSettingsScreen();
+}
+const syncSoon = (ms = 1500) => { clearTimeout(syncTimer); syncTimer = setTimeout(() => { syncNow(); }, ms); };
+
+function syncNow() {
+  if (syncRunning) return syncRunning;
+  syncRunning = runSync().finally(() => { syncRunning = null; syncStatus.busy = false; renderSyncUi(); });
+  return syncRunning;
+}
+
+// Takes the other device's copy and makes it this device's data.
+async function adoptRemote(remote) {
+  const data = await openWith(state.vault, remote.envelope);         // throws if it was made with a different passphrase set-up
+  const keep = state.sync;
+  loadSnapshot(data);
+  if (!state.sync) state.sync = keep;
+  await storage.save(remote.envelope);
+  state.save = 'saved';
+  lsSet(REV_KEY, String(remote.rev)); lsSet(DIRTY_KEY, '0');
+  recompute(); render();
+}
+
+async function pushLocal(client, ifMatch) {
+  const seq = editSeq;
+  const res = await client.push(state.sync.id, state.sync.token, ifMatch, await seal(state.vault, snapshot()));
+  if (!res.ok) return false;                                         // someone saved first: look again
+  lsSet(REV_KEY, String(res.rev));
+  if (seq === editSeq) lsSet(DIRTY_KEY, '0'); else syncSoon();       // edits made while saving go next
+  syncStatus.at = Date.now();
+  return true;
+}
+
+async function runSync() {
+  if (PREVIEW || !state.sync || !state.vault || state.demo || state.locked) return;
+  const client = createSyncClient();
+  syncStatus.busy = true; syncStatus.error = ''; renderSaveState();
+  lastSyncTry = Date.now();
+  try {
+    await flushSave();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const remote = await client.pull(state.sync.id, state.sync.token);
+      const action = planSync({ baseRev: baseRev(), dirty: lsGet(DIRTY_KEY) === '1', remote });
+      if (action === 'idle') { syncStatus.at = Date.now(); syncStatus.conflict = null; return; }
+      if (action === 'pull') { await adoptRemote(remote); syncStatus.at = Date.now(); syncStatus.conflict = null; return; }
+      if (action === 'conflict') { syncStatus.conflict = remote; return; }
+      if (action === 'rollback') { syncStatus.rollback = remote; syncStatus.error = 'The sync server has an older copy than this device last saw.'; return; }
+      if (await pushLocal(client, remote ? remote.rev : 0)) { syncStatus.conflict = null; return; }
+    }
+    syncStatus.error = 'Another device keeps saving at the same time. Try again in a moment.';
+  } catch (err) {
+    syncStatus.error = err.needsPassphrase ? 'The other copy was saved with a different passphrase set-up. Use “Join with a code” on this device.' : err.message;
+  }
+}
+
+// Both devices changed: you choose which copy to keep. The server still holds its last few versions either way.
+async function resolveConflict(keepThis) {
+  const remote = syncStatus.conflict;
+  if (!remote) return;
+  syncStatus.busy = true; syncStatus.error = ''; renderSyncUi();
+  try {
+    if (keepThis) { if (!(await pushLocal(createSyncClient(), remote.rev))) { syncStatus.conflict = null; syncStatus.busy = false; return syncNow(); } }
+    else await adoptRemote(remote);
+    syncStatus.conflict = null; syncStatus.at = Date.now();
+  } catch (err) { syncStatus.error = err.message; }
+  syncStatus.busy = false; renderSyncUi();
+}
+
+async function enableSync() {
+  if (!state.vault) throw new Error('Set a passphrase first (Saving & backup), so your data is encrypted before it leaves this device.');
+  if (state.demo) throw new Error('Turn dummy numbers off first.');
+  state.sync = newSyncKeys();
+  lsSet(REV_KEY, '0'); lsSet(DIRTY_KEY, '1'); editSeq++;
+  state.save = 'pending';
+  await syncNow();
+  if (syncStatus.error || !syncStatus.at) {
+    const why = syncStatus.error || 'Couldn’t save to the sync server.';
+    state.sync = null; lsSet(REV_KEY, null); lsSet(DIRTY_KEY, null); syncStatus.error = ''; syncStatus.at = null;
+    state.save = 'pending'; await flushSave();
+    throw new Error(why);
+  }
+  state.save = 'pending'; await flushSave();                          // keep the new keys on this device
+}
+
+function disableSync() {
+  state.sync = null; lsSet(REV_KEY, null); lsSet(DIRTY_KEY, null);
+  syncStatus.at = null; syncStatus.error = ''; syncStatus.conflict = null; syncStatus.rollback = null;
+  state.save = 'pending'; markDirty();
+}
+
+async function deleteServerCopy() {
+  const keys = state.sync;
+  if (!keys) return;
+  await createSyncClient().remove(keys.id, keys.token);
+  disableSync();
+}
+
+// Pairs this device with the data another device already syncs, using that device's code and your passphrase.
+async function joinSync(codeText, passphrase) {
+  if (state.demo) throw new Error('Turn dummy numbers off first.');
+  const keys = parsePairingCode(codeText);
+  const remote = await createSyncClient().pull(keys.id, keys.token);
+  if (!remote) throw new Error('The sync server has nothing for that code. Check it was copied from the device that turned sync on.');
+  const { vault, data } = await unlock(remote.envelope, passphrase);   // throws on a wrong passphrase
+  loadSnapshot(data);
+  state.sync = keys;
+  state.vault = vault; state.locked = false; state.envelope = null; state.demo = false;
+  await storage.save(remote.envelope);
+  state.save = 'saved'; state.tab = 'budget';
+  lsSet(REV_KEY, String(remote.rev)); lsSet(DIRTY_KEY, '0');
+  syncStatus.at = Date.now(); syncStatus.error = ''; syncStatus.conflict = null;
+  syncNotice = 'Paired. This device now has your data and will stay in step.';
+  state.persisted = await storage.requestPersistence();
+  recompute(); render(); renderSettingsScreen();
+}
+
+function renderSyncBanner() {
+  const el = $('syncbanner');
+  const c = syncStatus.conflict, back = syncStatus.rollback;
+  if (!state.sync || state.locked || state.demo || (!c && !back)) { el.hidden = true; el.replaceChildren(); return; }
+  el.hidden = false;
+  if (c) {
+    el.replaceChildren(h('span', { text: 'Both of your devices changed since they last synced. Which copy do you want to keep? (The other is not deleted from the server straight away.)' }),
+      h('span', { class: 'row-form' },
+        h('button', { class: 'btn', type: 'button', id: 'keep-this', text: 'Keep this device’s', onclick: () => resolveConflict(true) }),
+        h('button', { class: 'btn ghost', type: 'button', id: 'keep-other', text: 'Use the other device’s', onclick: () => resolveConflict(false) })));
+  } else {
+    el.replaceChildren(h('span', { text: 'The sync server has an older copy than this device last saw. That can mean it was restored from an old version. Your data on this device is unchanged.' }),
+      h('span', { class: 'row-form' },
+        h('button', { class: 'btn', type: 'button', text: 'Replace the server copy with this device’s', onclick: async () => {
+          try { await pushLocal(createSyncClient(), back.rev); syncStatus.rollback = null; syncStatus.error = ''; } catch (err) { syncStatus.error = err.message; }
+          renderSyncUi();
+        } }),
+        h('button', { class: 'btn ghost', type: 'button', text: 'Not now', onclick: () => { syncStatus.rollback = null; renderSyncUi(); } })));
+  }
+}
+
+// Coming back to the app, check for changes from your other device.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.sync && !state.locked && Date.now() - lastSyncTry > 15000) syncSoon(300);
+});
 
 // ---------- passphrase, lock, backup ----------
 const STORAGE_MSG = "This browser can't save data here (private browsing?).";
@@ -206,6 +372,7 @@ async function doUnlock() {
     }
     $('lock-pass').value = ''; msg.textContent = '';
     recompute(); render();
+    if (state.sync) syncNow();
   } catch (err) {
     msg.className = 'msg error'; msg.textContent = err.message;
   }
@@ -220,12 +387,14 @@ async function restoreFrom(file, pass) {
   loadSnapshot(data);
   try { await storage.save(await seal(vault, snapshot())); } catch { throw new Error(STORAGE_MSG); }
   state.vault = vault; state.locked = false; state.envelope = null; state.save = 'saved';
+  if (state.sync) { lsSet(DIRTY_KEY, '1'); editSeq++; syncNow(); }       // a restored backup is a change: other devices are asked before it overwrites them
   state.persisted = await storage.requestPersistence();
   recompute(); render(); renderSettingsScreen();
 }
 
 async function eraseDevice() {
   await storage.clear();
+  lsSet(REV_KEY, null); lsSet(DIRTY_KEY, null); syncStatus.at = null; syncStatus.error = ''; syncStatus.conflict = null; syncStatus.rollback = null;
   state.vault = null; state.locked = false; state.envelope = null; state.save = 'idle';
   clearMemory(); recompute(); render(); renderSettingsScreen();
   $('status').textContent = 'Everything on this device was erased.';
@@ -1302,7 +1471,7 @@ async function toggleDemo() {
 }
 
 // ---------- settings: a small sheet behind the gear ----------
-const SETTINGS_TITLES = { home: 'Settings', opening: 'Opening balances', coding: 'TB coding', trips: 'Trips', saving: 'Saving & backup' };
+const SETTINGS_TITLES = { home: 'Settings', opening: 'Opening balances', coding: 'TB coding', trips: 'Trips', saving: 'Saving & backup', sync: 'Sync' };
 
 function openSettings(screen = 'home') {
   state.settingsScreen = screen;
@@ -1329,7 +1498,7 @@ function renderSettingsScreen() {
   $('settings-back').hidden = screen === 'home';
   const body = $('settings-body');
   body.replaceChildren();
-  ({ home: renderHomeScreen, opening: renderOpeningScreen, coding: renderCodingScreen, trips: renderTripsScreen, saving: renderSavingScreen })[screen](body);
+  ({ home: renderHomeScreen, opening: renderOpeningScreen, coding: renderCodingScreen, trips: renderTripsScreen, saving: renderSavingScreen, sync: renderSyncScreen })[screen](body);
 }
 
 function renderHomeScreen(body) {
@@ -1342,6 +1511,7 @@ function renderHomeScreen(body) {
     go('TB coding', 'Map each account to your TB numbers', 'coding'),
     go('Trips', 'Vacation blocks, 7100 to 7900', 'trips'),
     go('Saving & backup', 'Passphrase, encrypted backup, restore', 'saving'),
+    go('Sync', state.sync ? (syncStatus.at ? 'On · your devices are in step' : 'On') : 'Keep your iPad and phone in step', 'sync'),
     h('div', { class: 'menu-row' },
       h('span', {}, 'Dummy numbers', h('small', { text: 'Show made-up numbers instead of yours, for showing friends. Turning it off needs your passphrase.' })),
       h('button', { type: 'button', class: 'switch', role: 'switch', 'aria-checked': String(state.demo), 'aria-label': 'Dummy numbers', id: 'demo-switch', onclick: guard(msg, toggleDemo) }))),
@@ -1352,6 +1522,69 @@ function renderHomeScreen(body) {
       h('span', { class: 'sub', id: 'app-version', text: `Version ${document.querySelector('meta[name="app-build"]')?.content ?? 'dev'}` }),
       h('button', { type: 'button', class: 'btn ghost small', id: 'reload-app', text: 'Reload app', onclick: () => location.reload() })),
     msg].filter(Boolean));
+}
+
+let syncNotice = '';   // a one-time message to show when the Sync screen redraws
+function renderSyncScreen(body) {
+  const msg = h('p', { class: 'msg', role: 'status', text: syncNotice });
+  syncNotice = '';
+  let revealed = false;
+  const kids = [];
+  if (PREVIEW) {
+    body.append(h('p', { class: 'sub', text: 'Sync isn’t available in this preview page.' }));
+    return;
+  }
+  if (state.demo) {
+    body.append(h('p', { class: 'sub', text: 'Turn dummy numbers off to manage sync.' }));
+    return;
+  }
+  const join = () => {
+    const code = h('input', { id: 'join-code', type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'Paste the pairing code', 'aria-label': 'Pairing code' });
+    const pass = h('input', { id: 'join-pass', type: 'password', autocomplete: 'current-password', placeholder: 'Your passphrase', 'aria-label': 'Passphrase' });
+    const has = state.vault || state.raw.length;
+    const go = guard(msg, async () => {
+      msg.className = 'msg'; msg.textContent = 'Connecting…';
+      await joinSync(code.value, pass.value);
+    });
+    return h('div', { class: 'stack' },
+      h('h3', { class: 'set-h', text: 'Join from another device' }),
+      h('p', { class: 'sub', text: 'On the device that already has your data, open Settings → Sync and copy its pairing code. Paste it here with your passphrase.' + (has ? ' This replaces the data on this device.' : '') }),
+      code, pass,
+      has ? twoStep('Replace this device’s data and join', 'Tap again to replace', () => go(), 'btn') : h('button', { class: 'btn', type: 'button', id: 'join-go', text: 'Join', onclick: () => go() }));
+  };
+  if (!state.sync) {
+    kids.push(
+      h('p', { class: 'sub', text: 'Keeps your data in step across your devices. It is encrypted on this device with your passphrase before it is sent, so your sync server only ever holds unreadable data. Nothing else leaves the device.' }),
+      h('button', { class: 'btn', type: 'button', id: 'sync-on', text: 'Turn on sync', onclick: guard(msg, async () => {
+        msg.className = 'msg'; msg.textContent = 'Setting up…';
+        await enableSync();
+        renderSettingsScreen();
+        const m = document.querySelector('#settings-body .msg'); if (m) { m.className = 'msg'; m.textContent = 'Sync is on. Copy the pairing code below to your other device.'; }
+      }) }),
+      join());
+  } else {
+    const code = pairingCode(state.sync);
+    const status = syncStatus.busy ? 'Syncing…' : syncStatus.error ? syncStatus.error : syncStatus.conflict ? 'Waiting for your choice (see the banner at the top).'
+      : syncStatus.at ? `In step as of ${new Date(syncStatus.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : 'Not synced yet.';
+    kids.push(
+      h('p', { class: syncStatus.error ? 'msg error' : 'sub', id: 'sync-status', text: status }),
+      h('button', { class: 'btn', type: 'button', id: 'sync-now', text: 'Sync now', onclick: () => { syncNow(); } }),
+      h('h3', { class: 'set-h', text: 'Add another device' }),
+      h('p', { class: 'sub', text: 'On the other device, open Settings → Sync → Join, then paste this code and enter your passphrase. Treat the code like a key to your sync server: it can’t unlock your data, but anyone with it could overwrite or delete the synced copy.' }),
+      h('div', { class: 'row-form' },
+        h('code', { id: 'pair-code', class: 'pair-code', text: revealed ? code : '•••••-•••••-•••••-•••••-•••••-•••••' }),
+        h('button', { class: 'btn ghost', type: 'button', id: 'pair-show', text: 'Show', onclick: e => { revealed = !revealed; $('pair-code').textContent = revealed ? code : '•••••-•••••-•••••-•••••-•••••-•••••'; e.currentTarget.textContent = revealed ? 'Hide' : 'Show'; } }),
+        h('button', { class: 'btn ghost', type: 'button', id: 'pair-copy', text: 'Copy', onclick: async () => {
+          try { await navigator.clipboard.writeText(code); msg.className = 'msg'; msg.textContent = 'Copied. Paste it on your other device.'; }
+          catch { revealed = true; $('pair-code').textContent = code; msg.className = 'msg'; msg.textContent = 'Couldn’t copy automatically. Select the code and copy it.'; }
+        } })),
+      h('h3', { class: 'set-h', text: 'Turn off' }),
+      h('div', { class: 'row-form' },
+        twoStep('Stop syncing on this device', 'Tap again to stop', () => { disableSync(); renderSettingsScreen(); }),
+        twoStep('Delete the synced copy', 'Tap again to delete it', guard(msg, async () => { await deleteServerCopy(); renderSettingsScreen(); }))),
+      h('p', { class: 'note', text: 'Stopping keeps the copy on the server and your other devices keep syncing. Deleting removes the server copy for every device; each keeps its own data.' }));
+  }
+  body.append(...kids, msg);
 }
 
 function renderOpeningScreen(body) {

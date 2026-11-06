@@ -236,6 +236,13 @@
     .btn.small { font-size: 12px; padding: 4px 8px; }
     .del-panel { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 8px 10px; margin: 2px 0 6px 84px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
     .del-panel select { max-width: 100%; }
+    .sub-add select { flex: 1 1 100%; min-width: 0; max-width: 100%; }
+    @media (max-width: 600px) {
+      .code-row { grid-template-columns: 64px minmax(0, 1fr); }
+      .code-row .row-actions { grid-column: 1 / -1; justify-content: flex-end; padding-bottom: 4px; }
+      .code-row input { width: 64px; }
+      .del-panel { margin-left: 0; }
+    }
     .sub-add { margin: 10px 0 6px; }
     .sub-add input { flex: 1 1 140px; min-width: 0; }
     .code-row .code.fixed { text-align: center; margin: 0; }

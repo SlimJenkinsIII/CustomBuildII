@@ -59,7 +59,7 @@ export const CATEGORIES = Object.fromEntries([
   c('fixed_health', 'fixed', '5140', 'Health insurance & medical'),
   c('fixed_debt', 'fixed', '5150', 'Student loans & other debt'),
 
-  c('sub_streaming', 'subscriptions', '5200', 'Streaming & music'),
+  c('sub_streaming', 'subscriptions', '5200', 'Subscriptions'),
   c('sub_software', 'subscriptions', '5210', 'Software & cloud'),
   c('sub_gym', 'subscriptions', '5220', 'Gym & memberships'),
   c('sub_other', 'subscriptions', '5290', 'Other subscriptions'),
@@ -264,7 +264,21 @@ export function applyRemoved(removed = {}) { REMOVED = { ...removed }; }
 export const removedList = () => Object.entries(REMOVED).map(([id, to]) => ({ key: id, code: DEFAULT_CODES[id], name: CATEGORIES[id]?.name, into: resolveCategory(id) }))
   .filter(r => CATEGORIES[r.key]).sort((a, b) => a.code.localeCompare(b.code));
 
-// Customs are [{ id, parent, code, name }]. They become ordinary categories, so every screen treats them like the built-in ones.
+// A sub account can carry words to look for in a statement line: "NETFLIX" files every Netflix charge under it.
+export function cleanMatch(raw) {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return [...new Set(list.map(x => String(x).trim().toUpperCase().slice(0, 40)).filter(x => x.length >= 3))].slice(0, 5);
+}
+// The matching words become rules that run before the built-in ones. Income accounts match money in, everything else money out.
+export function customRules(customs = []) {
+  return customs.flatMap(x => (x.match ?? []).map(contains => ({ contains, category: x.id, sign: CATEGORIES[x.parent]?.group === 'income' ? 'in' : 'out' })));
+}
+export function setMatch(customs, id, text) {
+  if (!customs.some(x => x.id === id)) throw new Error('That sub account does not exist.');
+  return customs.map(x => (x.id === id ? { ...x, match: cleanMatch(text) } : x));
+}
+
+// Customs are [{ id, parent, code, name, match }]. They become ordinary categories, so every screen treats them like the built-in ones.
 export function cleanCustoms(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [], ids = new Set(), codes = new Set();
@@ -274,7 +288,7 @@ export function cleanCustoms(raw) {
     const name = typeof x.name === 'string' ? x.name.trim().slice(0, 60) : '';
     if (!parentOk || !name) continue;
     ids.add(x.id); codes.add(String(x.code));
-    out.push({ id: x.id, parent: x.parent, code: String(x.code), name });
+    out.push({ id: x.id, parent: x.parent, code: String(x.code), name, match: cleanMatch(x.match) });
   }
   return out;
 }
@@ -300,7 +314,7 @@ export function nextSubCode(parentCode, used) {
 }
 
 // Returns { customs, id, code } with one sub account added, or throws a plain-English reason.
-export function addSub(customs, coding, parentKey, name) {
+export function addSub(customs, coding, parentKey, name, match = '') {
   if (!canParent(parentKey)) throw new Error('Choose an account to add the sub account under.');
   name = String(name).trim();
   if (!name) throw new Error('Type a name for the sub account.');
@@ -308,7 +322,7 @@ export function addSub(customs, coding, parentKey, name) {
   const used = new Set(accountsWith(coding).map(a => a.code));
   const code = nextSubCode(coding[parentKey] ?? DEFAULT_CODES[parentKey], used);
   const id = `sub_${(Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-10)}`;
-  return { customs: [...customs, { id, parent: parentKey, code, name }], id, code };
+  return { customs: [...customs, { id, parent: parentKey, code, name, match: cleanMatch(match) }], id, code };
 }
 
 // Removes a sub account and any sub accounts under it. Returns the new list and the ids removed.

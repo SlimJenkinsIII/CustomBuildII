@@ -239,3 +239,38 @@ test('transactions filed under a deleted account show under the one it moved int
     assert.equal(m.lines.some(l => l.id === 'sub_gym'), false);
   } finally { resetRemoved(); }
 });
+
+// ---------- sub accounts that file charges by keyword ----------
+import { customRules, setMatch, cleanMatch } from '../app/src/categories.js';
+import { categorize as categorizeTx } from '../app/src/rules.js';
+
+test('match words are cleaned: upper-cased, short ones dropped, duplicates removed, at most five', () => {
+  assert.deepEqual(cleanMatch('netflix, Netflix , ab, hulu'), ['NETFLIX', 'HULU']);
+  assert.deepEqual(cleanMatch(''), []);
+  assert.equal(cleanMatch('aaa,bbb,ccc,ddd,eee,fff').length, 5);
+});
+
+test('a sub account with match words gets those charges, ahead of the built-in rules', () => {
+  try {
+    const a = addSub([], {}, 'sub_streaming', 'Netflix', 'netflix');
+    applyCustoms(a.customs);
+    const txs = [
+      { id: '1', date: '2026-03-02', cents: -1599, description: 'NETFLIX.COM 866-579-7172 CA', account: 'chase-card' },
+      { id: '2', date: '2026-03-03', cents: -1099, description: 'SPOTIFY USA 877', account: 'chase-card' },
+    ];
+    const out = categorizeTx(txs, { userRules: customRules(a.customs) });
+    assert.equal(out[0].category, a.id);
+    assert.equal(out[1].category, 'sub_streaming');   // the built-in rule still handles the rest
+    assert.equal(CATEGORIES[a.id].group, 'subscriptions');
+    // match words can be changed later, and refunds (money in) are not swept in
+    const changed = setMatch(a.customs, a.id, 'hulu');
+    assert.deepEqual(changed[0].match, ['HULU']);
+    const refund = categorizeTx([{ ...txs[0], id: '3', cents: 1599 }], { userRules: customRules(a.customs) });
+    assert.notEqual(refund[0].category, a.id);
+  } finally { resetAll(); }
+});
+
+test('saved sub accounts keep their match words through cleaning', () => {
+  const out = cleanCustoms([{ id: 'sub_n', parent: 'sub_streaming', code: '5230', name: 'Netflix', match: ['netflix', 'x'] }]);
+  assert.deepEqual(out[0].match, ['NETFLIX']);
+});

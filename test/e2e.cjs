@@ -162,6 +162,9 @@ server.listen(0, async () => {
   // rename, and add a sub account under 1100 Investment account (1110 Crypto and 1120 Venmo are taken, so it lands on 1130)
   await page.fill('#name-free_coffee', 'Cafes'); await page.press('#name-free_coffee', 'Tab');
   check('an account can be renamed', (await page.inputValue('#name-free_coffee')) === 'Cafes');
+  await page.selectOption('#sub-parent', 'sub_streaming');
+  await page.fill('#sub-name', 'Netflix'); await page.fill('#sub-match', 'netflix'); await page.click('text=Add sub account');
+  check('a subscription sub account is added with its match words', (await page.locator('#settings-body input.name[value="Netflix"]').count()) === 1);
   await page.selectOption('#sub-parent', 'save_invest');
   await page.fill('#sub-name', 'Roth IRA'); await page.click('text=Add sub account');
   check('a sub account appears under its parent with the next free number', /Added 1130 Roth IRA/.test(await page.textContent('#settings-body')) && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
@@ -318,6 +321,10 @@ server.listen(0, async () => {
   check('category choice survived', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
   check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon'));
   check('TB coding survived', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
+  await gear('TB coding');
+  await closeSheet();
+  await goFS('gl');
+  check('Netflix charges file under the Netflix sub account on their own', /Netflix/.test(await glRow('NETFLIX').innerText()));
   await gear('TB coding');
   check('the deleted account stayed deleted', (await page.locator('#code-sub_gym').count()) === 0);
   check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);

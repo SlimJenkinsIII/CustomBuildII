@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -69,7 +69,7 @@ function recompute() {
   applyRemoved(state.removed);
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(categorize(matchTransfers(state.raw)), state.trips);
+  const auto = assignTrips(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.trips);
   state.txs = auto.map(t => {
     const pick = state.overrides[t.id];
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -1386,9 +1386,10 @@ function renderCodingScreen(body) {
   const parentSel = h('select', { id: 'sub-parent', 'aria-label': 'Add under' },
     parents.map(r => h('option', { value: r.key, text: `${r.code} ${r.name}` })));
   const subName = h('input', { id: 'sub-name', type: 'text', maxlength: '60', placeholder: 'Sub account name', 'aria-label': 'Sub account name' });
+  const subMatch = h('input', { id: 'sub-match', type: 'text', maxlength: '80', placeholder: 'Charges containing… e.g. NETFLIX (optional)', 'aria-label': 'Auto-file charges containing' });
   const addIt = () => {
     try {
-      const out = addSub(state.customs, state.coding, parentSel.value, subName.value);
+      const out = addSub(state.customs, state.coding, parentSel.value, subName.value, subMatch.value);
       state.customs = out.customs;
       recompute(); render(); markDirty(); renderSettingsScreen();
       const m = document.querySelector('#settings-body .msg');
@@ -1396,6 +1397,7 @@ function renderCodingScreen(body) {
       document.getElementById('sub-name')?.focus();
     } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
   };
+  subMatch.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
   subName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
 
   // Delete = merge: everything filed under the account (and its planned amount) moves into the one you pick.
@@ -1449,13 +1451,20 @@ function renderCodingScreen(body) {
                 refresh();
               }, 'btn ghost danger small')
             : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status }))));
+      if (r.custom) {
+        const mine = state.customs.find(x => x.id === r.key);
+        rows.push(h('div', { class: 'match-row' },
+          h('input', { id: `match-${r.key}`, type: 'text', maxlength: '80', value: (mine?.match ?? []).join(', '), placeholder: 'Auto-file charges containing… e.g. NETFLIX',
+            'aria-label': `Auto-file charges containing, for ${r.name}`,
+            onchange: e => { state.customs = setMatch(state.customs, r.key, e.target.value); refresh(`match-${r.key}`); } })));
+      }
       if (removingKey === r.key && r.canRemove) rows.push(deletePanel(r));
     }
   }
   body.append(
-    h('p', { class: 'sub', text: 'Rename any account, change its number, or delete it (its transactions move into another account of the same kind, and you can restore it later). Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112.' }),
+    h('p', { class: 'sub', text: 'Rename any account, change its number, or delete it (its transactions move into another account of the same kind, and you can restore it later). Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112. Give a sub account some words (like NETFLIX) and every statement line containing them files there automatically.' }),
     msg,
-    h('div', { class: 'row-form sub-add' }, parentSel, subName, h('button', { type: 'button', class: 'btn', text: 'Add sub account', onclick: addIt })),
+    h('div', { class: 'row-form sub-add' }, parentSel, subName, subMatch, h('button', { type: 'button', class: 'btn', text: 'Add sub account', onclick: addIt })),
     h('div', {}, rows),
     h('div', { class: 'row-form', style: 'margin-top:12px' },
       twoStep('Reset numbers and names to the defaults', 'Tap again to reset', () => {

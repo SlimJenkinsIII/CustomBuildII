@@ -184,8 +184,15 @@ async function doUnlock() {
   msg.className = 'msg'; msg.textContent = 'Unlocking…';
   try {
     const { vault, data } = await unlock(state.envelope, $('lock-pass').value);
-    loadSnapshot(data);
-    state.vault = vault; state.locked = false; state.save = 'saved'; state.tab = 'budget';
+    if (state.demo) {
+      // Dummy numbers were on: the passphrase is still required to get in, but the real data stays locked away.
+      loadSnapshot(dummySnapshot());
+      state.vault = null; state.locked = false; state.save = 'idle'; state.tab = 'budget';
+      $('status').textContent = 'Showing dummy numbers. Your own data is not on screen.';
+    } else {
+      loadSnapshot(data);
+      state.vault = vault; state.locked = false; state.save = 'saved'; state.tab = 'budget';
+    }
     $('lock-pass').value = ''; msg.textContent = '';
     recompute(); render();
   } catch (err) {
@@ -1519,10 +1526,8 @@ async function boot() {
     catch { $('status').textContent = `${STORAGE_MSG} You can still use the app, but nothing will be kept.`; }
   }
   if (env && readDemoFlag()) {
-    // Dummy numbers were on when the page closed: reopen on them, without asking for the passphrase.
-    state.envelope = env; state.demo = true;
-    loadSnapshot(dummySnapshot());
-    $('status').textContent = 'Showing dummy numbers. Your own data is not on screen.';
+    // Dummy numbers were on when the page closed: ask for the passphrase like any other opening, then go back to them.
+    state.envelope = env; state.demo = true; state.locked = true;
   } else if (env) {
     state.envelope = env; state.locked = true;
     writeDemoFlag(false);

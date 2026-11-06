@@ -341,8 +341,14 @@ server.listen(0, async () => {
   await closeSheet();
 
   await page.reload();
+  await page.waitForSelector('#lock:not([hidden])');
+  check('dummy mode still asks for the passphrase on reload, and shows nothing until it is given', await page.locator('#app').isHidden() && (await leaks()).length === 0 && !(await body()).includes('HARBOR PROPERTY'));
+  await page.fill('#lock-pass', 'wrong passphrase'); await page.click('#lock-btn');
+  await page.waitForFunction(() => /Wrong passphrase/.test(document.getElementById('lock-msg').textContent), null, { timeout: 15000 });
+  check('a wrong passphrase keeps dummy mode locked', await page.locator('#app').isHidden());
+  await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
   await page.waitForSelector('#app:not([hidden])');
-  check('dummy mode survives a reload with no passphrase prompt', await page.locator('#lock').isHidden() && (await chip()) === 'Dummy numbers on' && (await leaks()).length === 0);
+  check('the right passphrase returns to dummy numbers, not to your data', (await chip()) === 'Dummy numbers on' && (await leaks()).length === 0);
 
   await gear();
   await page.click('#demo-switch');

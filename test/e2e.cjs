@@ -195,6 +195,7 @@ server.listen(0, async () => {
   await page.click('#new-account');
   await page.fill('#acct-name', 'Roth IRA'); await page.selectOption('#acct-kind', 'savings'); await page.click('#settings-body .sub-add button:text-is("Add")');
   check('assets get their own next hundred', /Added 1100 Roth IRA/.test(await page.textContent('#settings-body')));
+  check('only accounts with keywords show a keyword line; a plain new account adds no extra line', (await page.locator('#settings-body .match-row').count()) === 1);
   check('there is no button to add a sub account at the top', (await page.locator('#sub-parent').count()) === 0);
   const netflixId = await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id');
   const netflixKey = netflixId.replace('name-', '');

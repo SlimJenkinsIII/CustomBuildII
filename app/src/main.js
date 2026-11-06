@@ -1527,8 +1527,8 @@ function renderCodingScreen(body) {
                 refresh();
               }, 'btn ghost danger small')
             : null)));
-      if (r.custom) {
-        const mine = state.customs.find(x => x.id === r.key);
+      const mine = r.custom ? state.customs.find(x => x.id === r.key) : null;
+      if (mine?.match?.length) {      // only accounts that actually file by keyword show the extra line
         rows.push(h('div', { class: 'match-row' + (r.depth ? ' nested' : ''), style: r.depth ? `--depth:${r.depth}` : null },
           h('input', { id: `match-${r.key}`, type: 'text', maxlength: '80', value: (mine?.match ?? []).join(', '), placeholder: 'Auto-file charges containing… e.g. NETFLIX',
             'aria-label': `Auto-file charges containing, for ${r.name}`,

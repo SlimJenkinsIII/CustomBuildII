@@ -101,8 +101,9 @@ test('names: blanks are refused, trips and system accounts are not renamed here,
 test('a sub account takes the next free number under its parent', () => {
   assert.equal(nextSubCode('1100', new Set(['1100'])), '1110');
   assert.equal(nextSubCode('1100', new Set(['1110'])), '1120');
-  assert.equal(nextSubCode('5110', new Set()), '5111');
-  assert.throws(() => nextSubCode('5455', new Set()), /no room/);
+  assert.equal(nextSubCode('5110', new Set()), '5112');
+  assert.equal(nextSubCode('5110', new Set(['5112', '5114'])), '5116');
+  assert.throws(() => nextSubCode('5455', new Set()), /deepest level/);
   assert.equal(nextSubCode('5400', new Set(Array.from({ length: 9 }, (_, i) => String(5410 + i * 10)))), '5401');
   assert.throws(() => nextSubCode('5110', new Set(Array.from({ length: 9 }, (_, i) => String(5111 + i)))), /no free numbers/);
 });
@@ -124,7 +125,7 @@ test('adding a sub account makes a real category in the parent\'s group, and the
     assert.equal(CATEGORIES[a.id].name, 'Dinner out');
     // sub account of a sub account
     const c = addSub([...customs], {}, a.id, 'Anniversary');
-    assert.equal(c.code, '5461');
+    assert.equal(c.code, '5462');
   } finally { resetAll(); }
   assert.equal(Object.values(CATEGORIES).some(x => x.custom), false);
 });
@@ -137,13 +138,14 @@ test('a new sub account skips numbers already used', () => {
   } finally { resetAll(); }
 });
 
-test('removing a sub account also removes the ones under it', () => {
+test('removing a sub account moves what sat under it up one level', () => {
   try {
     const a = addSub([], {}, 'save_invest', 'A'); applyCustoms(a.customs);
-    const b = addSub(a.customs, {}, a.id, 'B');
+    const b = addSub(a.customs, {}, a.id, 'B'); applyCustoms(b.customs);
     const out = removeSub(b.customs, a.id);
-    assert.deepEqual(out.customs, []);
-    assert.equal(out.removed.length, 2);
+    assert.deepEqual(out.customs.map(x => x.id), [b.id]);
+    assert.equal(out.customs[0].parent, 'save_invest');
+    assert.deepEqual(removeSub(out.customs, 'save_invest').customs.map(x => x.id), [b.id]);
   } finally { resetAll(); }
 });
 
@@ -273,4 +275,87 @@ test('a sub account with match words gets those charges, ahead of the built-in r
 test('saved sub accounts keep their match words through cleaning', () => {
   const out = cleanCustoms([{ id: 'sub_n', parent: 'sub_streaming', code: '5230', name: 'Netflix', match: ['netflix', 'x'] }]);
   assert.deepEqual(out[0].match, ['NETFLIX']);
+});
+
+// ---------- adding top-level accounts and dragging them ----------
+import { addAccount, moveAccount, nextHundred, applyParents, cleanParents, parentOf, depthOf } from '../app/src/categories.js';
+const resetStructure = () => { applyParents({}); resetRemoved(); };
+
+test('a new account takes the next free hundred in its section', () => {
+  try {
+    assert.equal(nextHundred('5', new Set(['5000', '5100', '5200'])), '5300');
+    const a = addAccount([], {}, 'subscriptions', 'Netflix');
+    assert.equal(a.code, '5300');       // 5100, 5200 and 5400 are taken in the starting chart
+    applyCustoms(a.customs);
+    assert.equal(CATEGORIES[a.id].group, 'subscriptions');
+    const b = addAccount(a.customs, {}, 'free', 'Pets');
+    assert.equal(b.code, '5500');
+    assert.equal(addAccount([], {}, 'income', 'Side work').code, '4100');
+    assert.equal(addAccount([], {}, 'savings', 'Brokerage').code, '1400');
+  } finally { resetStructure(); }
+});
+
+test('dragging an account under another numbers it in tens, skipping what is taken', () => {
+  try {
+    const a = addAccount([], {}, 'subscriptions', 'Netflix'); applyCustoms(a.customs);
+    // 5200 is Subscriptions; 5210, 5220 and 5290 are already used
+    const out = moveAccount({ coding: {}, parents: {}, customs: a.customs }, a.id, 'sub_streaming');
+    applyCustoms(out.customs); applyParents(out.parents);
+    assert.equal(out.coding[a.id], '5230');
+    assert.equal(parentOf(a.id), 'sub_streaming');
+    assert.equal(depthOf(a.id), 1);
+    // the next one goes to 5240; one under Netflix goes in twos: 5232
+    const b = addAccount(out.customs, out.coding, 'subscriptions', 'Hulu'); applyCustoms(b.customs);
+    const out2 = moveAccount({ ...out, customs: b.customs }, b.id, 'sub_streaming');
+    assert.equal(out2.coding[b.id], '5240');
+    const c = addAccount(out2.customs, out2.coding, 'subscriptions', 'Netflix 4K'); applyCustoms(c.customs); applyCoding(out2.coding);
+    const out3 = moveAccount({ ...out2, customs: c.customs }, c.id, a.id);
+    assert.equal(out3.coding[c.id], '5232');
+    assert.throws(() => moveAccount({ ...out3 }, 'sub_gym', c.id), /deepest level|three levels/);
+  } finally { resetStructure(); }
+});
+
+test('the spec example: under 5100 with 5110 taken, the next one is 5120', () => {
+  assert.equal(nextSubCode('5100', new Set(['5110'])), '5120');
+});
+
+test('built-in accounts can be dragged too, and their number and parent follow', () => {
+  try {
+    const out = moveAccount({ coding: {}, parents: {}, customs: [] }, 'sub_gym', 'sub_streaming');
+    applyParents(out.parents); applyCoding(out.coding);
+    assert.equal(parentOf('sub_gym'), 'sub_streaming');
+    assert.equal(CATEGORIES.sub_gym.code, '5220');   // 5210 is taken, so Gym stays at 5220, now nested under Subscriptions
+    // and back to the top of the section: a standard hundred
+    const back = moveAccount({ ...out }, 'sub_gym', 'top');
+    applyParents(back.parents); applyCoding(back.coding);
+    assert.equal(parentOf('sub_gym'), undefined);
+    assert.match(CATEGORIES.sub_gym.code, /00$/);
+  } finally { resetStructure(); }
+});
+
+test('moving an account carries everything under it, renumbered', () => {
+  try {
+    let st = { coding: {}, parents: {}, customs: [] };
+    const a = addAccount(st.customs, st.coding, 'free', 'Pets'); applyCustoms(a.customs); st.customs = a.customs;
+    const b = addAccount(st.customs, st.coding, 'free', 'Vet'); applyCustoms(b.customs); st.customs = b.customs;
+    st = moveAccount(st, b.id, a.id); applyParents(st.parents); applyCoding(st.coding);   // Vet under Pets
+    assert.equal(st.coding[b.id], String(Number(a.code) + 10));
+    applyCustoms(st.customs);
+    const to = moveAccount({ ...st, customs: st.customs }, a.id, 'sub_streaming');        // Pets (with Vet) under Subscriptions 5200
+    assert.equal(to.coding[a.id], '5230');
+    assert.equal(to.coding[b.id], '5232');                                                // and Vet follows, in twos
+  } finally { resetStructure(); }
+});
+
+test('accounts stay in their own section, and nothing goes under itself or its own child', () => {
+  try {
+    assert.throws(() => moveAccount({ coding: {}, parents: {}, customs: [] }, 'fixed_rent', 'save_chase'), /own section/);
+    assert.throws(() => moveAccount({ coding: {}, parents: {}, customs: [] }, 'fixed_rent', 'fixed_rent'), /can’t go under/);
+    assert.throws(() => moveAccount({ coding: {}, parents: {}, customs: [] }, 'vac1_food', 'top'), /can’t be moved/);
+  } finally { resetStructure(); }
+});
+
+test('saved parents are cleaned: unknown accounts, loops and your own accounts are dropped', () => {
+  assert.deepEqual(cleanParents({ sub_gym: 'sub_streaming', nope: 'sub_streaming', sub_other: 'nope', vac1_food: 'sub_gym', sub_software: 'sub_software' }), { sub_gym: 'sub_streaming' });
+  assert.deepEqual(cleanParents(null), {});
 });

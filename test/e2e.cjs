@@ -162,21 +162,54 @@ server.listen(0, async () => {
   // rename, and add a sub account under 1100 Investment account (1110 Crypto and 1120 Venmo are taken, so it lands on 1130)
   await page.fill('#name-free_coffee', 'Cafes'); await page.press('#name-free_coffee', 'Tab');
   check('an account can be renamed', (await page.inputValue('#name-free_coffee')) === 'Cafes');
-  await page.selectOption('#sub-parent', 'sub_streaming');
-  await page.fill('#sub-name', 'Netflix'); await page.fill('#sub-match', 'netflix'); await page.click('text=Add sub account');
-  check('a subscription sub account is added with its match words', (await page.locator('#settings-body input.name[value="Netflix"]').count()) === 1);
-  await page.selectOption('#sub-parent', 'save_invest');
-  await page.fill('#sub-name', 'Roth IRA'); await page.click('text=Add sub account');
-  check('a sub account appears under its parent with the next free number', /Added 1130 Roth IRA/.test(await page.textContent('#settings-body')) && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
+  // add accounts in general (they take the next free hundred), then drag them under another account
+  const drag = async (fromSel, toSel) => {
+    await page.locator(fromSel).scrollIntoViewIfNeeded();
+    const vh = page.viewportSize().height;
+    const from = await page.locator(fromSel).boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    // hold near an edge to let the list scroll itself, like a finger would
+    for (let i = 0; i < 400; i++) {
+      const to = await page.locator(toSel).boundingBox();
+      if (to && to.y > 130 && to.y + to.height < vh - 130) break;
+      await page.mouse.move(from.x + 10, to && to.y < 130 ? 20 : vh - 20, { steps: 2 });
+    }
+    await page.mouse.move(from.x + 10, vh / 2, { steps: 4 });   // back out of the scroll zone
+    const to = await page.locator(toSel).boundingBox();
+    await page.mouse.move(to.x + 40, to.y + to.height / 2, { steps: 8 });
+    await page.mouse.up();
+  };
+  await page.fill('#acct-name', 'Netflix'); await page.selectOption('#acct-kind', 'subscriptions'); await page.fill('#acct-match', 'netflix'); await page.click('button:has-text("Add account")');
+  check('a new account takes the next free hundred', /Added 5300 Netflix/.test(await page.textContent('#settings-body')));
+  await page.fill('#acct-name', 'Roth IRA'); await page.selectOption('#acct-kind', 'savings'); await page.click('button:has-text("Add account")');
+  check('assets get their own next hundred', /Added 1400 Roth IRA/.test(await page.textContent('#settings-body')));
+  check('there is no button to add a sub account at the top', (await page.locator('#sub-parent').count()) === 0);
+  const netflixId = await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id');
+  const netflixKey = netflixId.replace('name-', '');
+  await drag(`#settings-body .grip[aria-label^="Drag 5300"]`, '#settings-body .code-row[data-drop="sub_streaming"]');
+  await page.waitForSelector(`#code-${netflixKey}`);
+  check('dragging Netflix under Subscriptions numbers it in tens, skipping what is taken', (await page.inputValue(`#code-${netflixKey}`)) === '5230', await page.inputValue(`#code-${netflixKey}`));
+  check('it now sits indented under its parent', (await page.locator(`#settings-body .code-row.nested:has(#code-${netflixKey})`).count()) === 1);
+  await drag(`#settings-body .grip[aria-label^="Drag 1400"]`, '#settings-body .code-row[data-drop="save_invest"]');
+  await page.waitForTimeout(200);
+  check('an asset dragged under Investment account gets the next free ten', (await page.locator('#settings-body input[aria-label^="TB number for Roth IRA"]').inputValue()) === '1130');
+  await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="1"]');
+  check('dropping an account in the wrong section is refused', /own section/.test(await page.textContent('#settings-body')) && (await page.inputValue(`#code-${netflixKey}`)) === '5230');
+  await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="5"]');
+  check('dropping on its section title brings it back to a standard hundred', (await page.inputValue(`#code-${netflixKey}`)) === '5300');
+  await drag(`#settings-body .grip[aria-label^="Drag 5300"]`, '#settings-body .code-row[data-drop="sub_streaming"]');
+  check('and it can go back under Subscriptions', (await page.inputValue(`#code-${netflixKey}`)) === '5230');
+
   // delete an account: it merges into another of the same kind, and can be restored
   await page.click('button[aria-label^="Delete 5220"]');
   check('delete asks where to move it, and only offers the same kind', (await page.locator('#del-target option').allTextContents()).every(t => /^52/.test(t)));
-  await page.selectOption('#del-target', 'sub_other'); await page.click('text=Delete account');
+  await page.selectOption('#del-target', 'sub_other'); await page.click('button:has-text("Delete account")');
   check('a deleted account leaves the list and says where it went', (await page.locator('#code-sub_gym').count()) === 0 && /Deleted 5220/.test(await page.textContent('#settings-body')));
   check('it shows under Deleted accounts with a Restore button', (await page.locator('button[aria-label^="Restore"]').count()) === 1);
   await page.click('button[aria-label^="Restore"]');
   check('Restore brings it back', (await page.locator('#code-sub_gym').count()) === 1);
-  await page.click('button[aria-label^="Delete 5220"]'); await page.selectOption('#del-target', 'sub_other'); await page.click('text=Delete account');
+  await page.click('button[aria-label^="Delete 5220"]'); await page.selectOption('#del-target', 'sub_other'); await page.click('button:has-text("Delete account")');
   await closeSheet();
   await goFS('tb');
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
@@ -327,7 +360,7 @@ server.listen(0, async () => {
   check('Netflix charges file under the Netflix sub account on their own', /Netflix/.test(await glRow('NETFLIX').innerText()));
   await gear('TB coding');
   check('the deleted account stayed deleted', (await page.locator('#code-sub_gym').count()) === 0);
-  check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1);
+  check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1 && (await page.inputValue('#code-' + (await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id')).replace('name-', ''))) === '5230');
   await closeSheet();
   await page.click('#tab-budget'); await page.click('#plan-details summary');
   await goFS('tb');

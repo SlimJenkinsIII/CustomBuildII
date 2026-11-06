@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addSub, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -22,7 +22,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], removed: {},
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {},
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -67,6 +67,8 @@ function recompute() {
   applyNames(state.names);
   state.removed = cleanRemoved(state.removed);
   applyRemoved(state.removed);
+  state.parents = cleanParents(state.parents);
+  applyParents(state.parents);
   applyCoding(state.coding);
   applyTripNames(state.trips);
   const auto = assignTrips(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.trips);
@@ -110,7 +112,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, removed: state.removed, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -121,13 +123,15 @@ function loadSnapshot(d) {
   state.names = cleanNames(d.names);
   state.removed = cleanRemoved(d.removed);
   applyRemoved(state.removed);
+  state.parents = cleanParents(d.parents);
+  applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1359,6 +1363,7 @@ let removingKey = null;   // the account whose delete panel is open on the TB co
 function renderCodingScreen(body) {
   const msg = h('p', { class: 'msg', role: 'status' });
   const refresh = focusId => { recompute(); render(); markDirty(); renderSettingsScreen(); if (focusId) document.getElementById(focusId)?.focus(); };
+  const say = (text, bad = false) => { const m = document.querySelector('#settings-body .msg') ?? msg; m.className = bad ? 'msg error' : 'msg'; m.textContent = text; };
   const change = (key, value, input) => {
     try {
       state.coding = setCode(state.coding, key, value);
@@ -1380,25 +1385,69 @@ function renderCodingScreen(body) {
     }
   };
   const list = codingList(state.trips, state.coding, state.names);
+  const byKey = Object.fromEntries(list.map(r => [r.key, r]));
 
-  // Add a sub account: it takes the next free number below the account you pick.
-  const parents = list.filter(r => r.canAddSub);
-  const parentSel = h('select', { id: 'sub-parent', 'aria-label': 'Add under' },
-    parents.map(r => h('option', { value: r.key, text: `${r.code} ${r.name}` })));
-  const subName = h('input', { id: 'sub-name', type: 'text', maxlength: '60', placeholder: 'Sub account name', 'aria-label': 'Sub account name' });
-  const subMatch = h('input', { id: 'sub-match', type: 'text', maxlength: '80', placeholder: 'Charges containing… e.g. NETFLIX (optional)', 'aria-label': 'Auto-file charges containing' });
+  // Add an account. It takes the next free standard number in its section; drag it to wherever it belongs.
+  const kindSel = h('select', { id: 'acct-kind', 'aria-label': 'What kind of account' }, ADD_KINDS.map(([k, label]) => h('option', { value: k, text: label })));
+  const acctName = h('input', { id: 'acct-name', type: 'text', maxlength: '60', placeholder: 'Account name', 'aria-label': 'Account name' });
+  const acctMatch = h('input', { id: 'acct-match', type: 'text', maxlength: '80', placeholder: 'Charges containing… e.g. NETFLIX (optional)', 'aria-label': 'Auto-file charges containing' });
   const addIt = () => {
     try {
-      const out = addSub(state.customs, state.coding, parentSel.value, subName.value, subMatch.value);
+      const out = addAccount(state.customs, state.coding, kindSel.value, acctName.value, acctMatch.value);
       state.customs = out.customs;
+      const name = acctName.value.trim();
       recompute(); render(); markDirty(); renderSettingsScreen();
-      const m = document.querySelector('#settings-body .msg');
-      if (m) { m.className = 'msg'; m.textContent = `Added ${out.code} ${subName.value.trim()}.`; }
-      document.getElementById('sub-name')?.focus();
+      say(`Added ${out.code} ${name}. Drag its ≡ handle onto an account to put it underneath.`);
+      document.getElementById('acct-name')?.focus();
     } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
   };
-  subMatch.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
-  subName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
+  for (const el of [acctName, acctMatch]) el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addIt(); } });
+
+  // Dragging: grab ≡, drop on an account to nest it (numbers follow: tens, then twos), or on a section title to bring it back to the top.
+  const tryMove = (key, target) => moveAccount({ coding: state.coding, parents: state.parents, customs: state.customs }, key, target);
+  const startDrag = (e, r) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    try { handle.setPointerCapture(e.pointerId); } catch { /* not every browser lets a pointer be captured */ }
+    const ghost = h('div', { class: 'drag-ghost', text: `${r.code} ${r.name}` });
+    document.body.append(ghost);
+    const scroller = $('settings-body').closest('.overlay') ?? $('settings-body').parentElement;
+    let over = null, ok = false;
+    const clear = () => { document.querySelectorAll('.drop-ok, .drop-no').forEach(n => n.classList.remove('drop-ok', 'drop-no')); over = null; ok = false; };
+    const move = ev => {
+      ghost.style.left = `${ev.clientX + 12}px`; ghost.style.top = `${ev.clientY - 14}px`;
+      const rect = scroller.getBoundingClientRect();
+      if (ev.clientY < rect.top + 60) scroller.scrollTop -= 14; else if (ev.clientY > rect.bottom - 60) scroller.scrollTop += 14;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-drop]');
+      if (!el) { clear(); return; }
+      if (el === over) return;
+      clear(); over = el;
+      try { tryMove(r.key, el.dataset.drop === 'top' ? (el.dataset.cls === r.code[0] ? 'top' : 'x') : el.dataset.drop); ok = !(el.dataset.drop === 'top' && el.dataset.cls !== r.code[0]); }
+      catch { ok = false; }
+      el.classList.add(ok ? 'drop-ok' : 'drop-no');
+    };
+    const end = ev => {
+      handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', cancel);
+      ghost.remove();
+      const el = over, good = ok;
+      clear();
+      if (ev.type === 'pointerup' && el) {
+        const target = el.dataset.drop;
+        try {
+          if (target === 'top' && el.dataset.cls !== r.code[0]) throw new Error('Accounts stay in their own section: assets, income, expenses and so on.');
+          const next = tryMove(r.key, target);
+          state.coding = next.coding; state.parents = next.parents; state.customs = next.customs;
+          refresh();
+          const now = state.coding[r.key] ?? CATEGORIES[r.key].code;
+          say(target === 'top' ? `Moved ${r.name} to the top level: ${now}.` : `Moved ${r.name} under ${byKey[target].name}: now ${now}.`);
+        } catch (err) { say(err.message, true); }
+      } else if (ev.type === 'pointerup' && !good) { /* dropped on nothing */ }
+    };
+    const cancel = ev => end(ev);
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', cancel);
+    move(e);
+  };
 
   // Delete = merge: everything filed under the account (and its planned amount) moves into the one you pick.
   const deletePanel = r => {
@@ -1417,8 +1466,7 @@ function renderCodingScreen(body) {
             }
             removingKey = null;
             refresh();
-            const m = document.querySelector('#settings-body .msg');
-            if (m) { m.className = 'msg'; m.textContent = `Deleted ${r.code} ${r.name}. Everything in it moved to ${CATEGORIES[pick.value].code} ${CATEGORIES[pick.value].name}.`; }
+            say(`Deleted ${r.code} ${r.name}. Everything in it moved to ${CATEGORIES[pick.value].code} ${CATEGORIES[pick.value].name}.`);
           } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
         } }),
         h('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => { removingKey = null; renderSettingsScreen(); } })));
@@ -1427,9 +1475,13 @@ function renderCodingScreen(body) {
 
   const rows = [];
   for (const cls of [...new Set(list.map(r => r.class))]) {
-    rows.push(h('h3', { class: 'set-h', text: cls }));
+    const digit = list.find(x => x.class === cls).code[0];
+    rows.push(h('h3', { class: 'set-h', 'data-drop': 'top', 'data-cls': digit, text: cls }));
     for (const r of list.filter(x => x.class === cls)) {
-      rows.push(h('div', { class: 'code-row' + (r.custom ? ' sub' : '') },
+      rows.push(h('div', { class: 'code-row' + (r.depth ? ' nested' : ''), style: r.depth ? `--depth:${r.depth}` : null, ...(r.droppable ? { 'data-drop': r.key } : {}) },
+        r.movable
+          ? h('button', { type: 'button', class: 'grip', 'aria-label': `Drag ${r.code} ${r.name} to move it`, title: 'Drag onto an account to nest it', onpointerdown: e => startDrag(e, r) }, '≡')
+          : h('span', { class: 'grip off' }),
         r.editable
           ? h('input', { id: `code-${r.key}`, type: 'text', inputmode: 'numeric', maxlength: '4', value: r.code, class: r.changed ? 'changed' : '',
               'aria-label': `TB number for ${r.name}`, onchange: e => change(r.key, e.target.value, e.target) })
@@ -1439,8 +1491,6 @@ function renderCodingScreen(body) {
               'aria-label': `Name of account ${r.code}`, onchange: e => rename(r.key, e.target.value, e.target) })
           : h('span', { text: r.name }),
         h('span', { class: 'row-actions' },
-          r.canAddSub && h('button', { type: 'button', class: 'btn ghost small', text: '+ Sub', 'aria-label': `Add a sub account under ${r.code} ${r.name}`,
-            onclick: () => { parentSel.value = r.key; subName.focus(); subName.scrollIntoView({ block: 'center' }); } }),
           r.canRemove && h('button', { type: 'button', class: 'btn ghost danger small', text: 'Delete', 'aria-label': `Delete ${r.code} ${r.name}`,
             onclick: () => { removingKey = removingKey === r.key ? null : r.key; renderSettingsScreen(); } }),
           r.custom
@@ -1450,10 +1500,10 @@ function renderCodingScreen(body) {
                 for (const [tid, cat] of Object.entries(state.overrides)) if (out.removed.includes(cat)) delete state.overrides[tid];
                 refresh();
               }, 'btn ghost danger small')
-            : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status }))));
+            : (r.canRemove ? null : h('span', { class: 'coa-status' + (r.status === 'Planned' ? ' planned' : ''), text: r.changed ? 'Changed' : r.status })))));
       if (r.custom) {
         const mine = state.customs.find(x => x.id === r.key);
-        rows.push(h('div', { class: 'match-row' },
+        rows.push(h('div', { class: 'match-row' + (r.depth ? ' nested' : ''), style: r.depth ? `--depth:${r.depth}` : null },
           h('input', { id: `match-${r.key}`, type: 'text', maxlength: '80', value: (mine?.match ?? []).join(', '), placeholder: 'Auto-file charges containing… e.g. NETFLIX',
             'aria-label': `Auto-file charges containing, for ${r.name}`,
             onchange: e => { state.customs = setMatch(state.customs, r.key, e.target.value); refresh(`match-${r.key}`); } })));
@@ -1462,20 +1512,19 @@ function renderCodingScreen(body) {
     }
   }
   body.append(
-    h('p', { class: 'sub', text: 'Rename any account, change its number, or delete it (its transactions move into another account of the same kind, and you can restore it later). Numbers are 4 digits and used once. A sub account takes the next free number below its parent: under 1100 you get 1110, then 1120; under 5110, 5111, 5112. Give a sub account some words (like NETFLIX) and every statement line containing them files there automatically.' }),
+    h('p', { class: 'sub', text: 'Add an account, then drag its ≡ handle onto another account to tuck it underneath. Standard accounts count in hundreds (5100, 5200…), sub accounts in tens (5110, 5120…), and the level below that in twos (5112, 5114…). Rename anything, delete accounts you don’t use (their transactions move into another one), and give an account some words, like NETFLIX, to file matching charges there automatically.' }),
     msg,
-    h('div', { class: 'row-form sub-add' }, parentSel, subName, subMatch, h('button', { type: 'button', class: 'btn', text: 'Add sub account', onclick: addIt })),
+    h('div', { class: 'row-form sub-add' }, acctName, kindSel, acctMatch, h('button', { type: 'button', class: 'btn', text: 'Add account', onclick: addIt })),
     h('div', {}, rows),
-    h('div', { class: 'row-form', style: 'margin-top:12px' },
-      twoStep('Reset numbers and names to the defaults', 'Tap again to reset', () => {
-        state.coding = {}; state.names = {}; refresh();
-      })),
     gone.length > 0 && h('div', {}, h('h3', { class: 'set-h', text: 'Deleted accounts' }),
-      gone.map(g => h('div', { class: 'code-row' },
+      gone.map(g => h('div', { class: 'code-row plain' },
         h('span', { class: 'code fixed', text: g.code }), h('span', { text: `${g.name} → ${CATEGORIES[g.into].name}` }),
         h('button', { type: 'button', class: 'btn ghost small', text: 'Restore', 'aria-label': `Restore ${g.name}`,
           onclick: () => { state.removed = restoreAccount(state.removed, g.key); refresh(); } })))),
-    state.customs.length > 0 && h('p', { class: 'note', text: 'Removing a sub account sends anything filed under it back to automatic categories.' }));
+    h('div', { class: 'row-form', style: 'margin-top:12px' },
+      twoStep('Reset numbers, names and nesting to the defaults', 'Tap again to reset', () => {
+        state.coding = {}; state.names = {}; state.parents = {}; refresh();
+      })));
 }
 
 function renderTripsScreen(body) {

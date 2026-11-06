@@ -27,6 +27,7 @@ export const GROUPS = {
   free: 'Free cash',
   other: 'Other income & loss',
   system: 'System',
+  header: 'Parent account',
 };
 
 const c = (id, group, code, name) => [id, { id, group, code, name }];
@@ -102,12 +103,7 @@ export const SOURCE_ACCOUNTS = {
 };
 
 // Accounts that exist in the chart but no feature uses yet (they arrive with later phases).
-const PLANNED = [
-  { code: '1120', name: 'Venmo balance' },
-  { code: '1200', name: '401(k) & retirement' },
-  { code: '1300', name: 'Due from friends' },
-  { code: '2100', name: 'Loans & other debt' },
-];
+const PLANNED = [];   // reserved placeholder accounts were dropped: you build the chart you want, and nest it by dragging
 
 // Accounts the app itself uses. They hold a number but cannot be renumbered.
 export const SYSTEM_ACCOUNTS = [
@@ -156,7 +152,7 @@ export function applyTripNames(trips = []) {
 export function selectableCategories(trips = []) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
   return Object.values(CATEGORIES)
-    .filter(x => !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
+    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && (x.group !== 'vacation' || open.has(x.slot)))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account' }));
 }
 
@@ -287,10 +283,13 @@ export function setMatch(customs, id, text) {
 // Nesting stops there (three levels). Built-in accounts keep their own parent in PARENTS.
 let PARENTS = {};
 const GROUP_CLASS = { income: '4', fixed: '5', subscriptions: '5', free: '5', other: '6', onetime: '6', savings: '1' };
+const groupOk = g => g === 'header' || !!GROUP_CLASS[g];
 export const ADD_KINDS = [
   ['fixed', 'Fixed monthly expense'], ['subscriptions', 'Subscription'], ['free', 'Free-cash spending'], ['income', 'Income'],
-  ['savings', 'Savings or investment account'], ['other', 'Other income & loss'], ['onetime', 'One-time or annual'],
+  ['savings', 'Asset account (savings, investments, receivable…)'], ['other', 'Other income & loss'], ['onetime', 'One-time or annual'],
+  ['header', 'Parent account (groups other accounts)'],
 ];
+export const SECTIONS = [['1', 'Assets'], ['2', 'Liabilities'], ['3', 'Equity'], ['4', 'Revenue'], ['5', 'Expenses'], ['6', 'Other income / loss']];
 
 export function cleanCustoms(raw) {
   if (!Array.isArray(raw)) return [];
@@ -299,9 +298,9 @@ export function cleanCustoms(raw) {
     if (!x || !/^sub_[a-z0-9]{1,12}$/.test(x.id) || ids.has(x.id) || !/^\d{4}$/.test(String(x.code)) || codes.has(String(x.code))) continue;
     const builtin = CATEGORIES[x.parent] && !CATEGORIES[x.parent].custom && canParent(x.parent);
     const parent = ids.has(x.parent) || builtin ? x.parent : undefined;
-    const group = GROUP_CLASS[x.group] ? x.group : (parent && (CATEGORIES[parent]?.group ?? out.find(o => o.id === parent)?.group));
+    const group = groupOk(x.group) ? x.group : (parent && (CATEGORIES[parent]?.group ?? out.find(o => o.id === parent)?.group));
     const name = typeof x.name === 'string' ? x.name.trim().slice(0, 60) : '';
-    if (!GROUP_CLASS[group] || !name) continue;
+    if (!groupOk(group) || !name) continue;
     ids.add(x.id); codes.add(String(x.code));
     out.push({ id: x.id, ...(parent && { parent }), group, code: String(x.code), name, match: cleanMatch(x.match) });
   }
@@ -321,18 +320,23 @@ export const parentOf = id => {
   const p = CATEGORIES[id]?.custom ? CATEGORIES[id].parent : PARENTS[id];
   return p && CATEGORIES[p] && !(p in REMOVED) ? p : undefined;
 };
+export const isHeader = id => CATEGORIES[id]?.group === 'header';
+// The parent accounts above one account, outermost first.
+export const headersAbove = id => { const out = []; for (let at = parentOf(id); at && out.length < 4; at = parentOf(at)) if (isHeader(at)) out.unshift(at); return out; };
 export const depthOf = id => { let d = 0; for (let at = parentOf(id); at && d < 5; at = parentOf(at)) d++; return d; };
-const childrenOf = (id, coding = {}) => Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && parentOf(x.id) === id)
-  .map(x => x.id).sort((a, b) => (coding[a] ?? DEFAULT_CODES[a]).localeCompare(coding[b] ?? DEFAULT_CODES[b]));
+const childrenOf = (id, coding = {}) => nestable().filter(k => parentOf(k) === id).sort((a, b) => codeNow(a, coding).localeCompare(codeNow(b, coding)));
 const heightOf = (id, coding) => childrenOf(id, coding).reduce((h, c) => Math.max(h, 1 + heightOf(c, coding)), 0);
 const subtreeOf = (id, coding) => [id, ...childrenOf(id, coding).flatMap(c => subtreeOf(c, coding))];
-const isMovable = id => canParent(id);
+const isSource = id => id.startsWith('src:') && id.slice(4) in SOURCE_ACCOUNTS;
+const isMovable = id => canParent(id) || isSource(id);
+const codeNow = (id, coding = {}) => coding[id] ?? defaultCode(id);
+const nestable = () => [...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && canParent(x.id)).map(x => x.id), ...Object.keys(SOURCE_ACCOUNTS).map(k => `src:${k}`)];
 
 export function cleanParents(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
   for (const [id, p] of Object.entries(raw)) {
-    if (CATEGORIES[id] && !CATEGORIES[id].custom && canParent(id) && CATEGORIES[p] && canParent(p) && id !== p) out[id] = p;
+    if (((CATEGORIES[id] && !CATEGORIES[id].custom && canParent(id)) || isSource(id)) && CATEGORIES[p] && canParent(p) && id !== p) out[id] = p;
   }
   // no loops, and no deeper than three levels
   const parentIn = (map, id) => (CATEGORIES[id]?.custom ? CATEGORIES[id].parent : map[id]);
@@ -366,14 +370,27 @@ export function nextHundred(cls, used) {
 const usedCodes = (coding, except = []) => new Set(accountsWith(coding).filter(a => !except.includes(a.key)).map(a => a.code));
 
 // Adds a top-level account of a kind you choose. It takes the next free hundred in its section.
-export function addAccount(customs, coding, kind, name, match = '') {
-  if (!GROUP_CLASS[kind]) throw new Error('Choose what kind of account it is.');
+export function addAccount(customs, coding, kind, name, match = '', { number = '', section = '' } = {}) {
+  if (!groupOk(kind)) throw new Error('Choose what kind of account it is.');
   name = String(name).trim();
   if (!name) throw new Error('Type a name for the account.');
   if (name.length > 60) throw new Error('Keep the name under 60 characters.');
-  const code = nextHundred(GROUP_CLASS[kind], usedCodes(coding));
+  const used = usedCodes(coding);
+  let code;
+  number = String(number ?? '').trim();
+  if (number) {
+    if (!/^\d{4}$/.test(number)) throw new Error('Use a 4-digit number.');
+    const clash = accountsWith(coding).find(a => a.code === number);
+    if (clash) throw new Error(`${number} is already used by ${clash.name}.`);
+    if (kind !== 'header' && number[0] !== GROUP_CLASS[kind]) throw new Error(`That kind of account lives in the ${GROUP_CLASS[kind]}000s.`);
+    code = number;
+  } else {
+    const cls = kind === 'header' ? String(section) : GROUP_CLASS[kind];
+    if (!/^[1-7]$/.test(cls)) throw new Error('Choose which section the parent account belongs to.');
+    code = nextHundred(cls, used);
+  }
   const id = `sub_${(Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-10)}`;
-  return { customs: [...customs, { id, group: kind, code, name, match: cleanMatch(match) }], id, code };
+  return { customs: [...customs, { id, group: kind, code, name, match: kind === 'header' ? [] : cleanMatch(match) }], id, code };
 }
 
 // Adds an account straight under another one. (The screen adds top-level accounts and you drag them; this is the same rule in code.)
@@ -385,6 +402,30 @@ export function addSub(customs, coding, parentKey, name, match = '') {
   const code = nextSubCode(coding[parentKey] ?? DEFAULT_CODES[parentKey], usedCodes(coding));
   const id = `sub_${(Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-10)}`;
   return { customs: [...customs, { id, parent: parentKey, group: CATEGORIES[parentKey].group, code, name, match: cleanMatch(match) }], id, code };
+}
+
+// One tap to lay assets out as: 1000 Checking, 1200 Savings, 1300 Accounts Receivable, 1400 Investments, with your
+// accounts nested under them. Returns new { coding, parents, customs }, or throws if one of those numbers is in use.
+export function organizeAssets({ coding = {}, parents = {}, customs = [] }) {
+  const moving = ['src:chase-checking', 'save_chase', 'save_amex', 'save_invest', 'save_crypto'];
+  const layout = { 'src:chase-checking': ['CHK', '1010'], save_chase: ['SAV', '1210'], save_amex: ['SAV', '1220'], save_invest: ['INV', '1410'], save_crypto: ['INV', '1420'] };
+  const headers = [['CHK', 'Checking', '1000'], ['SAV', 'Savings', '1200'], ['AR', 'Accounts Receivable', '1300'], ['INV', 'Investments', '1400']];
+  const wanted = [...headers.map(x => x[2]), '1310', ...Object.values(layout).map(x => x[1])];
+  const used = usedCodes(coding, moving);
+  const clash = wanted.filter(c => used.has(c));
+  if (clash.length) throw new Error(`These numbers are already in use: ${clash.join(', ')}. Renumber or delete those first.`);
+  const stamp = Date.now().toString(36).slice(-6);
+  const ids = Object.fromEntries(headers.map(([k], i) => [k, `sub_${stamp}h${i}`]));
+  const nextCustoms = [...customs,
+    ...headers.map(([k, name, code]) => ({ id: ids[k], group: 'header', code, name, match: [] })),
+    { id: `sub_${stamp}r0`, parent: ids.AR, group: 'savings', code: '1310', name: 'Due from friends', match: [] }];
+  const nextCoding = { ...coding }, nextParents = { ...parents };
+  for (const k of moving) {
+    const [h, code] = layout[k];
+    if (code === defaultCode(k)) delete nextCoding[k]; else nextCoding[k] = code;
+    nextParents[k] = ids[h];
+  }
+  return { coding: nextCoding, parents: nextParents, customs: nextCustoms };
 }
 
 // Removes an account you added. Anything that sat under it moves up to where it was.
@@ -400,12 +441,12 @@ export function removeSub(customs, id) {
 // Returns new { coding, parents, customs } with every affected number reassigned, or throws a plain-English reason.
 export function moveAccount({ coding = {}, parents = {}, customs = [] }, key, target) {
   if (!isMovable(key)) throw new Error('That account can’t be moved.');
-  const codeOf = k => coding[k] ?? DEFAULT_CODES[k];
+  const codeOf = k => codeNow(k, coding);
   const cls = codeOf(key)[0];
   const tree = subtreeOf(key, coding);
   let used = usedCodes(coding, tree);
   const nextCoding = { ...coding };
-  const assign = (k, code) => { if (code === DEFAULT_CODES[k]) delete nextCoding[k]; else nextCoding[k] = code; used.add(code); };
+  const assign = (k, code) => { if (code === defaultCode(k)) delete nextCoding[k]; else nextCoding[k] = code; used.add(code); };
 
   let newParent;
   let top;
@@ -424,7 +465,7 @@ export function moveAccount({ coding = {}, parents = {}, customs = [] }, key, ta
 
   const nextParents = { ...parents };
   let nextCustoms = customs;
-  if (CATEGORIES[key].custom) {
+  if (CATEGORIES[key]?.custom) {
     const newGroup = newParent ? CATEGORIES[newParent].group : CATEGORIES[key].group;
     const inTree = new Set(tree);
     nextCustoms = customs.map(x => {
@@ -468,8 +509,8 @@ export function codingList(trips = [], coding = {}, names = {}) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
   const rows = [
     ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
-      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id) })),
-    ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true })),
+      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
+    ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true, movable: true, droppable: false, depth: depthOf(`src:${k}`), hasKids: false })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, code: a.code, name: a.name, status: 'Active', editable: false })),
   ];

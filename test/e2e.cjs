@@ -162,6 +162,14 @@ server.listen(0, async () => {
   // rename, and add a sub account under 1100 Investment account (1110 Crypto and 1120 Venmo are taken, so it lands on 1130)
   await page.fill('#name-free_coffee', 'Cafes'); await page.press('#name-free_coffee', 'Tab');
   check('an account can be renamed', (await page.inputValue('#name-free_coffee')) === 'Cafes');
+  // one tap lays out the assets: Checking 1000, Savings 1200, Accounts Receivable 1300, Investments 1400
+  await page.click('button:has-text("Set up assets")'); await page.click('button:has-text("Tap again to set up")');
+  await page.waitForSelector('#code-save_amex');
+  const codeOf = async k => page.inputValue(`[id="code-${k}"]`);
+  check('the assets layout numbers the accounts under their parents', (await codeOf('src:chase-checking')) === '1010' && (await codeOf('save_chase')) === '1210' && (await codeOf('save_amex')) === '1220' && (await codeOf('save_invest')) === '1410' && (await codeOf('save_crypto')) === '1420');
+  check('it adds the four parent accounts and Due from friends', (await page.locator('#settings-body input.name[value="Accounts Receivable"]').count()) === 1 && (await page.locator('#settings-body input.name[value="Due from friends"]').count()) === 1 && (await page.locator('#settings-body input.name[value="Checking"]').count()) === 1);
+  check('the setup button goes away once assets have parents', (await page.locator('button:has-text("Set up assets")').count()) === 0);
+
   // add accounts in general (they take the next free hundred), then drag them under another account
   const drag = async (fromSel, toSel) => {
     await page.locator(fromSel).scrollIntoViewIfNeeded();
@@ -186,7 +194,7 @@ server.listen(0, async () => {
   check('a new account takes the next free hundred', /Added 5300 Netflix/.test(await page.textContent('#settings-body')));
   await page.click('#new-account');
   await page.fill('#acct-name', 'Roth IRA'); await page.selectOption('#acct-kind', 'savings'); await page.click('#settings-body .sub-add button:text-is("Add")');
-  check('assets get their own next hundred', /Added 1400 Roth IRA/.test(await page.textContent('#settings-body')));
+  check('assets get their own next hundred', /Added 1100 Roth IRA/.test(await page.textContent('#settings-body')));
   check('there is no button to add a sub account at the top', (await page.locator('#sub-parent').count()) === 0);
   const netflixId = await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id');
   const netflixKey = netflixId.replace('name-', '');
@@ -194,9 +202,9 @@ server.listen(0, async () => {
   await page.waitForSelector(`#code-${netflixKey}`);
   check('dragging Netflix under Subscriptions numbers it in tens, skipping what is taken', (await page.inputValue(`#code-${netflixKey}`)) === '5230', await page.inputValue(`#code-${netflixKey}`));
   check('it now sits indented under its parent', (await page.locator(`#settings-body .code-row.nested:has(#code-${netflixKey})`).count()) === 1);
-  await drag(`#settings-body .grip[aria-label^="Drag 1400"]`, '#settings-body .code-row[data-drop="save_invest"]');
+  await drag(`#settings-body .grip[aria-label^="Drag 1100"]`, '#settings-body .code-row[data-drop="save_invest"]');
   await page.waitForTimeout(200);
-  check('an asset dragged under Investment account gets the next free ten', (await page.locator('#settings-body input[aria-label^="TB number for Roth IRA"]').inputValue()) === '1130');
+  check('an asset dragged under Investment account gets the next free two', (await page.locator('#settings-body input[aria-label^="TB number for Roth IRA"]').inputValue()) === '1412');
   await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="1"]');
   check('dropping an account in the wrong section is refused', /own section/.test(await page.textContent('#settings-body')) && (await page.inputValue(`#code-${netflixKey}`)) === '5230');
   await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="5"]');
@@ -213,6 +221,9 @@ server.listen(0, async () => {
   await closeSheet();
   await goFS('tb');
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
+  const tbText = await page.locator('#fs-tb').textContent();
+  check('TB Summary heads each group with its parent account', /1000\s*Checking/.test(tbText) && /1200\s*Savings/.test(tbText), 'Checking and Savings head their accounts');
+  check('and indents the accounts under them', (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 3);
   await goFS('tb');
   check('TB Summary follows the new number', (await page.locator('#fs-tb').textContent()).includes('5455'));
   const codes = await page.locator('#fs-tb tbody tr:not(.hdr):not(.tot):not(.tot2):not(.net):not(.run) .code').allTextContents();

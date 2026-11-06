@@ -41,7 +41,7 @@ test('accounts are labelled with their class and sorted by code', () => {
   assert.equal(classOf('5430'), 'Expenses');
   assert.equal(classOf('6010'), 'Other income / loss');
   assert.equal(classOf('7000'), 'Vacations');
-  assert.equal(chart.find(a => a.code === '1120').status, 'Planned');
+  assert.ok(chart.every(a => a.status === 'Active'));          // no reserved placeholders: you build the chart you want
 });
 
 test('labels show code then name', () => {

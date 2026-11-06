@@ -2,7 +2,7 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -689,10 +689,15 @@ function periodPickers(asOf, id) {
   return h('div', { class: 'row-form' }, month, year);
 }
 
-// Sub accounts sit indented under their parent on every statement.
-const indentLevel = key => (key && CATEGORIES[key] ? depthOf(key) : 0);
+// Sub accounts sit indented under their parent on every statement, and a parent account shows as a heading above its children.
+const indentLevel = key => (key ? depthOf(key) : 0);
 const indentClass = key => (indentLevel(key) ? ' sub-acct' : '');
 const indentStyle = key => (indentLevel(key) ? `--depth:${indentLevel(key)}` : null);
+const headerRow = (key, span) => h('tr', { class: 'hdr hdr-acct' },
+  h('td', { class: 'acct' + indentClass(key), style: indentStyle(key) }, h('span', { class: 'code', text: CATEGORIES[key].code }), CATEGORIES[key].name), h('td', { colspan: span }));
+const emitHeaders = (body, key, emitted, span) => {
+  for (const k of headersAbove(key)) if (!emitted.has(k)) { emitted.add(k); body.append(headerRow(k, span)); }
+};
 
 // The three statement pages are drawn together, so a change of year shows on all of them.
 function renderFS(asOf, focusId) {
@@ -726,12 +731,15 @@ function renderTrialBalance(asOf) {
 
   const body = h('tbody');
   let lastClass = null;
+  let emitted = new Set();
   const span = bal ? 14 : 13;
   for (const r of shown) {
     if (r.class !== lastClass) {
+      emitted = new Set();
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: r.class }), h('td', { colspan: span })));
       lastClass = r.class;
     }
+    emitHeaders(body, r.key, emitted, span);
     const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, h('span', { class: 'code', text: r.code }), r.name));
     if (bal) tr.append(h('td', { text: whole(r.openBal) }));
     tb.months.forEach((ym, i) => {
@@ -813,7 +821,8 @@ function renderBalanceSheet(asOf) {
 
   const body = h('tbody');
   const dot = () => h('td', { class: 'empty', text: '·' });
-  const header = label => body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: span })));
+  let emitted = new Set();
+  const header = label => { emitted = new Set(); body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: label }), h('td', { colspan: span }))); };
   // One line of numbers: either the whole year across, or the month against the month before.
   const numbers = (tr, group, r, t) => {
     const src = r ?? t;
@@ -840,6 +849,7 @@ function renderBalanceSheet(asOf) {
     tr.append(td, h('td', { text: whole(was) }), h('td', { text: whole(cur - was) }));
   };
   const accountRow = group => r => {
+    emitHeaders(body, r.key, emitted, span);
     const tr = h('tr', {}, h('td', { class: 'acct' + indentClass(r.key), style: indentStyle(r.key) }, r.code && h('span', { class: 'code', text: r.code }), r.name));
     numbers(tr, group, r, null);
     body.append(tr);
@@ -1010,6 +1020,7 @@ function renderMatrix(asOf) {
 
   const body = h('tbody');
   const span = mo ? 3 : 14;
+  let emitted = new Set();
   const drillCell = (l, ym, v) => {
     const td = h('td');
     if (l.kind === 'row' && v !== 0) {
@@ -1020,10 +1031,12 @@ function renderMatrix(asOf) {
   };
   for (const l of m.lines) {
     if (l.kind === 'header') {
+      emitted = new Set();
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
       continue;
     }
     if (mo && l.kind === 'running') continue;
+    if (l.kind === 'row') emitHeaders(body, l.id, emitted, span);
     const cls = { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
     const tr = h('tr', { class: cls }, h('td', { class: 'acct' + (l.kind === 'row' ? indentClass(l.id) : ''), style: l.kind === 'row' ? indentStyle(l.id) : null }, l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label));
     if (mo) {
@@ -1400,9 +1413,14 @@ function renderCodingScreen(body) {
   const kindSel = h('select', { id: 'acct-kind', 'aria-label': 'What kind of account' }, ADD_KINDS.map(([k, label]) => h('option', { value: k, text: label })));
   const acctName = h('input', { id: 'acct-name', type: 'text', maxlength: '60', placeholder: 'Account name', 'aria-label': 'Account name' });
   const acctMatch = h('input', { id: 'acct-match', type: 'text', maxlength: '80', placeholder: 'Charges containing… e.g. NETFLIX (optional)', 'aria-label': 'Auto-file charges containing' });
+  const acctNumber = h('input', { id: 'acct-number', type: 'text', inputmode: 'numeric', maxlength: '4', placeholder: 'Number (optional)', 'aria-label': 'Account number, optional' });
+  const sectionSel = h('select', { id: 'acct-section', 'aria-label': 'Section for the parent account', hidden: true },
+    SECTIONS.map(([d, label]) => h('option', { value: d, text: `${label} (${d}000s)`, selected: d === '1' })));
+  kindSel.addEventListener('change', () => { const header = kindSel.value === 'header'; sectionSel.hidden = !header || !!acctNumber.value; acctMatch.hidden = header; });
+  acctNumber.addEventListener('input', () => { sectionSel.hidden = kindSel.value !== 'header' || !!acctNumber.value; });
   const addIt = () => {
     try {
-      const out = addAccount(state.customs, state.coding, kindSel.value, acctName.value, acctMatch.value);
+      const out = addAccount(state.customs, state.coding, kindSel.value, acctName.value, acctMatch.value, { number: acctNumber.value, section: sectionSel.value });
       state.customs = out.customs;
       const name = acctName.value.trim();
       addingAccount = false;
@@ -1523,10 +1541,19 @@ function renderCodingScreen(body) {
     h('p', { class: 'sub', text: 'Add an account, then drag its ≡ handle onto another account to tuck it underneath. Standard accounts count in hundreds (5100, 5200…), sub accounts in tens (5110, 5120…), and the level below that in twos (5112, 5114…). Rename anything, delete accounts you don’t use (their transactions move into another one; Reset brings them all back), and give an account some words, like NETFLIX, to file matching charges there automatically.' }),
     msg,
     addingAccount
-      ? h('div', { class: 'row-form sub-add' }, acctName, kindSel, acctMatch,
+      ? h('div', { class: 'row-form sub-add' }, acctName, kindSel, sectionSel, acctNumber, acctMatch,
           h('button', { type: 'button', class: 'btn', text: 'Add', onclick: addIt }),
           h('button', { type: 'button', class: 'btn ghost', text: 'Cancel', onclick: () => { addingAccount = false; renderSettingsScreen(); } }))
       : h('div', { class: 'row-form sub-add' }, h('button', { type: 'button', class: 'btn', id: 'new-account', text: 'New account', onclick: () => { addingAccount = true; renderSettingsScreen(); document.getElementById('acct-name')?.focus(); } })),
+    !list.some(r => r.header && r.code[0] === '1') && h('div', { class: 'row-form', style: 'margin: 4px 0 8px' },
+      twoStep('Set up assets: Checking, Savings, Receivable, Investments', 'Tap again to set up', () => {
+        try {
+          const out = organizeAssets({ coding: state.coding, parents: state.parents, customs: state.customs });
+          state.coding = out.coding; state.parents = out.parents; state.customs = out.customs;
+          refresh();
+          say('Assets are set up: 1000 Checking, 1200 Savings, 1300 Accounts Receivable, 1400 Investments, with your accounts under them.');
+        } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+      }, 'btn ghost')),
     h('div', {}, rows),
     h('div', { class: 'row-form', style: 'margin-top:12px' },
       twoStep('Reset everything to the defaults', 'Tap again to reset', () => {

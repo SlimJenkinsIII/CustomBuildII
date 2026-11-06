@@ -30,7 +30,7 @@ test('numbers must be four digits and unique', () => {
   assert.throws(() => setCode({}, 'free_groceries', '543'), /4-digit/);
   assert.throws(() => setCode({}, 'free_groceries', 'abcd'), /4-digit/);
   assert.throws(() => setCode({}, 'free_groceries', '5410'), /5410 is already used by Coffee/);   // another account's number
-  assert.throws(() => setCode({}, 'free_groceries', '1200'), /already used by 401\(k\)/);         // a planned account's number
+  assert.throws(() => setCode({}, 'free_groceries', '1100'), /already used by Investment account/);
   assert.throws(() => setCode({}, 'src:amex', '5100'), /already used by Rent/);
   assert.throws(() => setCode({}, 'nope', '1234'), /cannot be renumbered/);
   assert.throws(() => setCode({}, 'transfer', '1234'), /cannot be renumbered/);
@@ -63,11 +63,11 @@ test('the table follows your numbers: order and header ranges', () => {
   } finally { reset(); }
 });
 
-test('the coding screen lists every visible account in number order, marking planned ones as fixed', () => {
+test('the coding screen lists every visible account in number order, with bank accounts movable', () => {
   const list = codingList([], {});
   assert.deepEqual(list.map(r => r.code), [...list.map(r => r.code)].sort());
   assert.ok(list.find(r => r.key === 'src:chase-checking').editable);
-  assert.equal(list.find(r => r.name === '401(k) & retirement').editable, false);
+  assert.equal(list.find(r => r.key === 'src:chase-checking').movable, true);          // bank accounts can be nested too
   assert.ok(!list.some(r => r.key === 'vac3_food'));                       // trip blocks that don't exist yet are hidden
   assert.ok(codingList([{ slot: 3, name: 'X' }], {}).some(r => r.key === 'vac3_food'));
   assert.equal(codingList([], { free_coffee: '5999' }).find(r => r.key === 'free_coffee').changed, true);
@@ -132,9 +132,9 @@ test('adding a sub account makes a real category in the parent\'s group, and the
 
 test('a new sub account skips numbers already used', () => {
   try {
-    // 1100 Investment account: 1110 is Crypto and 1120 is the reserved Venmo balance, so the first free is 1130
+    // 1100 Investment account: 1110 is Crypto, so the first free number is 1120
     const a = addSub([], {}, 'save_invest', 'Brokerage 2');
-    assert.equal(a.code, '1130');
+    assert.equal(a.code, '1120');
   } finally { resetAll(); }
 });
 
@@ -291,7 +291,7 @@ test('a new account takes the next free hundred in its section', () => {
     const b = addAccount(a.customs, {}, 'free', 'Pets');
     assert.equal(b.code, '5500');
     assert.equal(addAccount([], {}, 'income', 'Side work').code, '4100');
-    assert.equal(addAccount([], {}, 'savings', 'Brokerage').code, '1400');
+    assert.equal(addAccount([], {}, 'savings', 'Brokerage').code, '1200');
   } finally { resetStructure(); }
 });
 
@@ -358,4 +358,62 @@ test('accounts stay in their own section, and nothing goes under itself or its o
 test('saved parents are cleaned: unknown accounts, loops and your own accounts are dropped', () => {
   assert.deepEqual(cleanParents({ sub_gym: 'sub_streaming', nope: 'sub_streaming', sub_other: 'nope', vac1_food: 'sub_gym', sub_software: 'sub_software' }), { sub_gym: 'sub_streaming' });
   assert.deepEqual(cleanParents(null), {});
+});
+
+// ---------- parent accounts, nestable bank accounts, and the assets layout ----------
+import { organizeAssets, isHeader, headersAbove } from '../app/src/categories.js';
+
+test('a parent account holds no money: it is not offered for transactions, and it takes the number you give it', () => {
+  try {
+    const a = addAccount([], {}, 'header', 'Checking', '', { section: '1' });
+    assert.equal(a.code, '1200');                                   // lowest free hundred in assets
+    const b = addAccount(a.customs, {}, 'header', 'Savings', '', { number: '1500' });
+    assert.equal(b.code, '1500');
+    applyCustoms(b.customs);
+    assert.equal(isHeader(a.id), true);
+    assert.equal(selectableCategories([]).some(c => c.id === a.id), false);
+    assert.equal(codingList([], {}).some(r => r.key === a.id && r.header), true);
+    assert.throws(() => addAccount(b.customs, {}, 'header', 'X', '', { number: '1500' }), /already used by Savings/);
+    assert.throws(() => addAccount([], {}, 'header', 'X'), /Choose which section/);
+    assert.throws(() => addAccount([], {}, 'fixed', 'X', '', { number: '1234' }), /5000s/);
+  } finally { resetStructure(); }
+});
+
+test('bank accounts can be nested under a parent account, and their number follows', () => {
+  try {
+    const hdr = addAccount([], {}, 'header', 'Checking', '', { section: '1' }); applyCustoms(hdr.customs);
+    const out = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, 'src:chase-checking', hdr.id);
+    applyParents(out.parents); applyCoding(out.coding);
+    assert.equal(parentOf('src:chase-checking'), hdr.id);
+    assert.equal(SOURCE_ACCOUNTS['chase-checking'].code, String(Number(hdr.code) + 10));
+    assert.deepEqual(headersAbove('src:chase-checking'), [hdr.id]);
+    assert.equal(depthOf('src:chase-checking'), 1);
+  } finally { resetStructure(); }
+});
+
+test('the assets layout: Checking 1000, Savings 1200, Accounts Receivable 1300, Investments 1400 with your accounts nested', () => {
+  try {
+    const st = organizeAssets({});
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const code = k => (k.startsWith('src:') ? SOURCE_ACCOUNTS[k.slice(4)] : CATEGORIES[k]).code;
+    assert.deepEqual(['src:chase-checking', 'save_chase', 'save_amex', 'save_invest', 'save_crypto'].map(code), ['1010', '1210', '1220', '1410', '1420']);
+    const heads = st.customs.filter(x => x.group === 'header');
+    assert.deepEqual(heads.map(x => `${x.code} ${x.name}`), ['1000 Checking', '1200 Savings', '1300 Accounts Receivable', '1400 Investments']);
+    const friends = st.customs.find(x => x.name === 'Due from friends');
+    assert.equal(friends.code, '1310');
+    assert.equal(friends.parent, heads[2].id);
+    assert.equal(parentOf('save_amex'), heads[1].id);
+    assert.equal(depthOf('save_crypto'), 1);
+    // all numbers are unique, and a second run is refused rather than doubled up
+    const all = [...Object.values(CATEGORIES).filter(x => x.code).map(x => x.code), ...Object.values(SOURCE_ACCOUNTS).map(x => x.code)];
+    assert.equal(new Set(all).size, all.length);
+    assert.throws(() => organizeAssets(st), /already in use/);
+  } finally { resetStructure(); }
+});
+
+test('saved nesting of a bank account survives cleaning', () => {
+  try {
+    const hdr = addAccount([], {}, 'header', 'Checking', '', { section: '1' }); applyCustoms(hdr.customs);
+    assert.deepEqual(cleanParents({ 'src:chase-checking': hdr.id, 'src:nope': hdr.id }), { 'src:chase-checking': hdr.id });
+  } finally { resetStructure(); }
 });

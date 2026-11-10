@@ -472,7 +472,7 @@ function openPicker(cell, t) {
     },
     onblur: () => renderGlRows() },
     h('option', { value: '__auto', text: 'Let the app decide' }),
-    [...groups].map(([cls, items]) => h('optgroup', { label: cls }, items.map(c => h('option', { value: c.id, text: c.label, selected: c.id === t.category })))));
+    [...groups].map(([cls, items]) => h('optgroup', { label: cls }, items.map(c => h('option', { value: c.id, text: '\u00a0\u00a0'.repeat(c.depth) + c.label, selected: c.id === t.category })))));
   cell.replaceChildren(select);
   select.focus();
 }

@@ -389,6 +389,14 @@ server.listen(0, async () => {
   await gear('TB coding');
   await closeSheet();
   await goFS('gl');
+  const pickRow = glRow('MAGNOLIA CAFE');
+  await pickRow.locator('.linkbtn').click();
+  const pickOpts = (await pickRow.locator('select option').allTextContents()).map(t => t.replace(/\u00a0/g, '').trim());
+  const pickCodes = pickOpts.map(t => t.match(/^(\d{4})/)?.[1]).filter(Boolean);
+  check('the category choices are in number order', pickCodes.length > 20 && pickCodes.join() === [...pickCodes].sort().join(), pickCodes.slice(0, 8).join(' '));
+  check('the accounts you added are in the choices', pickOpts.some(t => /Netflix$/.test(t)) && pickOpts.some(t => /Roth IRA$/.test(t)));
+  check('parent accounts that hold no money are not offered', !pickOpts.some(t => /Accounts Receivable$|^1000\s*Checking$/.test(t)));
+  await page.click('#gl-count');
   check('Netflix charges file under the Netflix sub account on their own', /Netflix/.test(await glRow('NETFLIX').innerText()));
   await gear('TB coding');
   check('the deleted account stayed deleted', (await page.locator('#code-sub_gym').count()) === 0);

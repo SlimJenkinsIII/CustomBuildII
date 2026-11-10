@@ -417,3 +417,20 @@ test('saved nesting of a bank account survives cleaning', () => {
     assert.deepEqual(cleanParents({ 'src:chase-checking': hdr.id, 'src:nope': hdr.id }), { 'src:chase-checking': hdr.id });
   } finally { resetStructure(); }
 });
+
+test('the category choices are in number order, with the accounts you add where their number puts them', () => {
+  try {
+    const a = addAccount([], {}, 'subscriptions', 'Netflix'); applyCustoms(a.customs);
+    const out = moveAccount({ coding: {}, parents: {}, customs: a.customs }, a.id, 'sub_streaming');
+    applyCustoms(out.customs); applyParents(out.parents); applyCoding(out.coding);
+    const list = selectableCategories([]);
+    const numbered = list.filter(c => /^\d{4}$/.test(c.code)).map(c => c.code);
+    assert.deepEqual(numbered, [...numbered].sort());
+    const i = list.findIndex(c => c.id === a.id);
+    assert.equal(list[i].code, '5230');
+    assert.equal(list[i].depth, 1);                                    // shown indented under Subscriptions
+    assert.ok(list.findIndex(c => c.id === 'sub_other') > i);          // 5290 comes after 5230
+    assert.ok(list.findIndex(c => c.id === 'sub_software') < i);       // 5210 comes before it
+    assert.equal(list[list.length - 1].class, 'Not an account');       // transfers go last
+  } finally { resetStructure(); }
+});

@@ -151,9 +151,11 @@ export function applyTripNames(trips = []) {
 // Categories you can pick for a transaction: everything except trip blocks that don't exist yet.
 export function selectableCategories(trips = []) {
   const open = new Set([0, ...trips.map(t => t.slot)]);
+  // In number order, so your own accounts sit where their number puts them, not at the end. Anything that isn't an account comes last.
   return Object.values(CATEGORIES)
     .filter(x => !(x.id in REMOVED) && x.group !== 'header' && (x.group !== 'vacation' || open.has(x.slot)))
-    .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account' }));
+    .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account', code: x.code ?? '9999', depth: x.code ? depthOf(x.id) : 0 }))
+    .sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
 }
 
 // ---------- TB coding: your own numbers for each account ----------

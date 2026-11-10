@@ -1300,6 +1300,7 @@ $('banner-btn').addEventListener('click', () => { openSettings('saving'); $('sec
 
 function render() {
   renderSaveState();
+  syncHome();
   $('lock').hidden = !state.locked;
   $('app').hidden = state.locked;
   $('add-btn').hidden = state.locked || state.demo;
@@ -1886,6 +1887,56 @@ function renderSavingScreen(body) {
   body.append(...kids, msg);
 }
 
+// ---------- the home screen: a picture, the time, and a swipe up to the password ----------
+// Shown whenever something has to be unlocked: the access code on a new device, or your passphrase on a device with saved data.
+const ROOT_EL = document.documentElement;
+const HAS_VAULT_KEY = 'my-budget-has-vault';
+let homeClock = null;
+function tickHome() {
+  const now = new Date();
+  $('home-time').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '');
+  $('home-date').textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+}
+function openHome() {
+  if (!ROOT_EL.hasAttribute('data-home')) return;
+  ROOT_EL.setAttribute('data-open', '1');
+  setTimeout(() => ($('gate-code') && !$('gate').hidden ? $('gate-code') : $('lock-pass'))?.focus(), 380);
+}
+function closeHome() {
+  ROOT_EL.removeAttribute('data-open');
+  document.activeElement?.blur?.();
+}
+// Decides whether the home picture should be up, from what is true right now.
+function syncHome() {
+  const need = ROOT_EL.hasAttribute('data-gated') || state.locked;
+  if (need) ROOT_EL.setAttribute('data-home', '1'); else { ROOT_EL.removeAttribute('data-home'); ROOT_EL.removeAttribute('data-open'); }
+  lsSet(HAS_VAULT_KEY, state.vault || state.envelope ? '1' : null);
+  if (need && !homeClock) { tickHome(); homeClock = setInterval(tickHome, 15000); }
+  if (!need && homeClock) { clearInterval(homeClock); homeClock = null; }
+}
+(() => {
+  const home = $('home');
+  let startY = null;
+  home.addEventListener('pointerdown', e => { startY = e.clientY; });
+  home.addEventListener('pointermove', e => {
+    if (startY === null || ROOT_EL.hasAttribute('data-open')) return;
+    if (startY - e.clientY > 50) { startY = null; openHome(); }
+  });
+  for (const t of ['pointerup', 'pointercancel']) home.addEventListener(t, e => {
+    const moved = startY === null ? 99 : Math.abs(startY - e.clientY);
+    // a tap on the picture (not the button) puts the sheet away again
+    if (t === 'pointerup' && moved < 8 && ROOT_EL.hasAttribute('data-open') && !e.target.closest('#home-hint')) closeHome();
+    startY = null;
+  });
+  home.addEventListener('wheel', e => { if (e.deltaY > 20) openHome(); }, { passive: true });
+  $('home-hint').addEventListener('click', openHome);
+  document.addEventListener('keydown', e => {
+    if (!ROOT_EL.hasAttribute('data-home')) return;
+    if (e.key === 'ArrowUp' || (e.key === 'Enter' && !ROOT_EL.hasAttribute('data-open') && document.activeElement === document.body)) { e.preventDefault(); openHome(); }
+    if (e.key === 'Escape') closeHome();
+  });
+})();
+
 // ---------- start up ----------
 $('lock-restore-btn').addEventListener('click', async () => {
   const msg = $('lock-msg');
@@ -1921,6 +1972,7 @@ async function openDoorThenBoot() {
   const spec = parseAccess(document.querySelector('meta[name="app-access"]')?.getAttribute('content'));
   if (!spec || !document.documentElement.hasAttribute('data-gated')) { boot(); return; }
   $('gate').hidden = false;
+  syncHome();
   const form = $('gate-form'), input = $('gate-code'), msg = $('gate-msg'), btn = $('gate-btn');
   let misses = 0;
   input.focus();
@@ -1934,6 +1986,7 @@ async function openDoorThenBoot() {
       document.documentElement.removeAttribute('data-gated');
       document.title = 'My Budget';
       input.value = ''; $('gate').hidden = true;
+      syncHome();
       boot();
       return;
     }

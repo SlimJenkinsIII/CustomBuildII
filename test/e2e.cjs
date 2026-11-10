@@ -30,7 +30,7 @@ const check = (name, ok, extra = '') => { console.log((ok ? 'PASS ' : 'FAIL ') +
 
 server.listen(0, async () => {
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 1000, height: 1000 }, acceptDownloads: true });
+  const ctx = await browser.newContext({ viewport: { width: 1000, height: 1000 }, acceptDownloads: true, reducedMotion: 'reduce' });
   const page = await ctx.newPage();
   const problems = [];
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));
@@ -52,6 +52,8 @@ server.listen(0, async () => {
     if (screen) await page.locator('#settings-body .menu-row', { hasText: screen }).click();
   };
   const closeSheet = () => page.click('#settings-close');
+  // Locked devices show the home picture first: swipe up (here: tap the hint) to reach the passphrase box.
+  const openHome = async () => { if (await page.locator('#home').isVisible() && !(await page.evaluate(() => document.documentElement.hasAttribute('data-open')))) { await page.click('#home-hint'); await page.waitForTimeout(500); } };
   const glRow = text => page.locator('#out tbody tr', { hasText: text }).first();
   const goFS = async pg => { await page.click('#tab-fs'); await page.selectOption('#fs-page', pg); };
   const onGL = async () => (await page.getAttribute('#tab-fs', 'aria-selected')) === 'true' && (await page.inputValue('#fs-page')) === 'gl';
@@ -368,9 +370,11 @@ server.listen(0, async () => {
   await page.reload();
   await page.waitForSelector('#lock:not([hidden])');
   check('locked after reload, nothing visible', await page.locator('#app').isHidden() && !(await body()).includes('WHOLEFDS'));
+  await openHome();
   await page.fill('#lock-pass', 'wrong passphrase'); await page.click('#lock-btn');
   await page.waitForFunction(() => /Wrong passphrase/.test(document.getElementById('lock-msg').textContent), null, { timeout: 15000 });
   check('wrong passphrase rejected', await page.locator('#lock').isVisible());
+  await openHome();
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
   await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num', { timeout: 15000 });
   await goFS('gl');
@@ -421,9 +425,11 @@ server.listen(0, async () => {
   await page.reload();
   await page.waitForSelector('#lock:not([hidden])');
   check('dummy mode still asks for the passphrase on reload, and shows nothing until it is given', await page.locator('#app').isHidden() && (await leaks()).length === 0 && !(await body()).includes('HARBOR PROPERTY'));
+  await openHome();
   await page.fill('#lock-pass', 'wrong passphrase'); await page.click('#lock-btn');
   await page.waitForFunction(() => /Wrong passphrase/.test(document.getElementById('lock-msg').textContent), null, { timeout: 15000 });
   check('a wrong passphrase keeps dummy mode locked', await page.locator('#app').isHidden());
+  await openHome();
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
   await page.waitForSelector('#app:not([hidden])');
   check('the right passphrase returns to dummy numbers, not to your data', (await chip()) === 'Dummy numbers on' && (await leaks()).length === 0);
@@ -479,6 +485,7 @@ server.listen(0, async () => {
   await page.click('text=Lock now');
   await page.waitForSelector('#lock:not([hidden])');
   check('lock now hides and clears everything', !(await body()).includes('WHOLEFDS') && await page.locator('#app').isHidden());
+  await openHome();
   await page.fill('#lock-pass', PASS); await page.click('#lock-btn');
   await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num', { timeout: 15000 });
   check('and unlocks again, back on Budget', true);

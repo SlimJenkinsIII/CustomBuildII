@@ -30,6 +30,7 @@
   <meta name="apple-mobile-web-app-title" content="Budget">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#1f5f8b">
+  <link rel="preload" as="image" href="img/home.jpg">
   <title>My Budget</title>
   <style>
     /* Layout: one friendly column. This week first, then trend, month, where it went, habits.
@@ -260,7 +261,39 @@
     table.mx tr.hdr-acct td { font-weight: 600; font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--ink); background: transparent; }
     .sub-add select, .sub-add input { max-width: 100%; }
     /* the front door: while it is closed, the app is not shown at all */
-    html[data-gated] body > *:not(#gate):not(script) { display: none !important; }
+    /* the home screen: a picture, the time, and a swipe-up to the password. Used for the access code and for the passphrase lock. */
+    #home { display: none; position: fixed; inset: 0; z-index: 900; background: #1a2230; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+    html[data-home] #home { display: block; }
+    html[data-home] body { overflow: hidden; }
+    html[data-home] body > *:not(#home):not(#gate):not(script):not(main) { display: none !important; }
+    html[data-home] main > *:not(#lock) { display: none !important; }
+    .home-bg { position: absolute; inset: 0; background: #1a2230 url(img/home.jpg) center 62% / cover no-repeat; transform: scale(1.02); transition: transform .5s ease, filter .5s ease; }
+    .home-bg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(10, 16, 28, .38), rgba(10, 16, 28, 0) 30%, rgba(10, 16, 28, 0) 55%, rgba(10, 16, 28, .55)); }
+    html[data-open] .home-bg { transform: scale(1.08); filter: blur(6px) brightness(.8); }
+    .home-clock { position: absolute; left: 0; right: 0; top: max(9vh, env(safe-area-inset-top, 0px) + 40px); text-align: center; color: #fff; text-shadow: 0 2px 18px rgba(0, 0, 0, .35); transition: opacity .3s ease, transform .4s ease; }
+    html[data-open] .home-clock { opacity: 0; transform: translateY(-14px); }
+    .home-time { font-size: clamp(72px, 16vw, 132px); font-weight: 200; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    .home-date { font-size: clamp(16px, 3.4vw, 22px); font-weight: 500; margin-top: 6px; opacity: .95; }
+    .home-hint { position: absolute; left: 50%; bottom: max(28px, env(safe-area-inset-bottom, 0px) + 22px); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; color: #fff; font: inherit; font-size: 15px; font-weight: 500; letter-spacing: .02em; text-shadow: 0 1px 10px rgba(0, 0, 0, .5); cursor: pointer; padding: 12px 24px; animation: home-bob 2.4s ease-in-out infinite; transition: opacity .3s ease; }
+    .home-chev { font-size: 22px; line-height: .8; }
+    html[data-open] .home-hint { opacity: 0; pointer-events: none; }
+    @keyframes home-bob { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -7px); } }
+    html[data-home] #gate, html[data-home] #lock {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; margin: 0 auto; max-width: 520px; max-height: 88vh; overflow-y: auto;
+      border-radius: 24px 24px 0 0; padding: 26px 22px max(26px, env(safe-area-inset-bottom, 0px) + 18px);
+      background: rgba(250, 251, 253, .86); -webkit-backdrop-filter: blur(24px) saturate(1.5); backdrop-filter: blur(24px) saturate(1.5);
+      box-shadow: 0 -10px 40px rgba(0, 0, 0, .28); transform: translateY(110%); transition: transform .42s cubic-bezier(.2, .8, .2, 1);
+      touch-action: auto;
+    }
+    html[data-home][data-open] #gate, html[data-home][data-open] #lock { transform: translateY(0); }
+    html[data-home] #gate { min-height: 0; display: block; }
+    html[data-home] #lock { display: block; }
+    html[data-home] #lock[hidden] { display: none; }
+    html[data-home] #gate[hidden] { display: none; }
+    @media (prefers-color-scheme: dark) { html[data-home] #gate, html[data-home] #lock { background: rgba(24, 30, 42, .84); color: #e6ecf2; } }
+    @media (prefers-reduced-motion: reduce) { .home-bg, .home-clock, html[data-home] #gate, html[data-home] #lock { transition: none; } .home-hint { animation: none; } }
+
+    html[data-gated] body > *:not(#gate):not(#home):not(script) { display: none !important; }
     #gate { min-height: 80vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
     html:not([data-gated]) #gate { display: none; }
     #gate form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
@@ -340,6 +373,11 @@
   </style>
 </head>
 <body>
+  <div id="home">
+    <div class="home-bg"></div>
+    <div class="home-clock" aria-hidden="true"><div class="home-time" id="home-time"></div><div class="home-date" id="home-date"></div></div>
+    <button type="button" class="home-hint" id="home-hint"><span class="home-chev" aria-hidden="true">&#8963;</span><span>Swipe up to unlock</span></button>
+  </div>
   <section id="gate" hidden aria-labelledby="gate-title">
     <form id="gate-form" autocomplete="on">
       <h1 id="gate-title">Private</h1>

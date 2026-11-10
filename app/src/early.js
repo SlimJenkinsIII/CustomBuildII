@@ -2,6 +2,9 @@
 // it marks the page as gated, so the app is never shown, and gives the tab a plain title. (A classic script on
 // purpose: it must run first, and it can't wait for the rest of the app to load.)
 (function () {
+  // A device that already holds saved data will open on its lock screen: show the home picture straight away, so the
+  // app never flashes up first. (A hint only; the app checks the real storage as soon as it starts.)
+  try { if (localStorage.getItem('my-budget-has-vault') === '1') document.documentElement.setAttribute('data-home', '1'); } catch (e) { /* no storage: nothing to show early */ }
   var meta = document.querySelector('meta[name="app-access"]');
   var spec = meta && meta.getAttribute('content');
   if (!spec) return;
@@ -11,5 +14,6 @@
   try { granted = localStorage.getItem('my-budget-access'); } catch (e) { granted = null; }
   if (granted === m[1].slice(0, 16)) return;
   document.documentElement.setAttribute('data-gated', '1');
+  document.documentElement.setAttribute('data-home', '1');
   document.title = 'Private';
 })();

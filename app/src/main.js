@@ -5,7 +5,7 @@ import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, MAX_TRIPS } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip } from './trips.js';
@@ -76,7 +76,7 @@ function recompute() {
   applyTripNames(state.trips);
   const auto = assignTrips(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.trips);
   state.txs = auto.map(t => {
-    const pick = state.overrides[t.id];
+    const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
     const home = resolveCategory(out.category);
     return home === out.category ? out : { ...out, category: home };
@@ -1816,7 +1816,7 @@ function renderTripsScreen(body) {
     recompute(); render(); renderSettingsScreen(); markDirty();
   });
   body.append(
-    h('p', { class: 'sub', text: `Each trip gets its own block of accounts: the first is 7100 (lodging 7110, flights 7120, food 7130, entertainment 7140 and so on), the second 7200, up to ${MAX_TRIPS}. Vacation charges file under the trip they fall in, from 45 days before to 10 days after. Change any single one from GL Detail.` }),
+    h('p', { class: 'sub', text: `Each trip is an account named after it: the first is 7100, the second 7200, up to ${MAX_TRIPS}. Every trip comes with the same five accounts under it: Travel (7110), Lodging (7120), Food & drinks (7130), Entertainment (7140) and Purchases (7150). The trip shows the total of the five. Vacation charges file under the trip they fall in, from 45 days before to 10 days after. Change any single one from GL Detail.` }),
     state.trips.length
       ? h('div', {}, state.trips.map(t => h('div', { class: 'trip' },
           h('span', { class: 'code', text: `7${t.slot}00` }),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATEGORIES, applyCoding, applyCustoms, applyParents, applyRemoved, addAccount, moveAccount } from '../app/src/categories.js';
+import { CATEGORIES, applyCoding, applyCustoms, applyParents, applyRemoved, addAccount, moveAccount, applyTripNames } from '../app/src/categories.js';
 import { nestRows, addMaps } from '../app/src/nesting.js';
 
 const reset = () => { applyParents({}); applyRemoved({}); applyCustoms([]); applyCoding({}); };
@@ -57,4 +57,19 @@ test('three levels roll up all the way: the top sums every level below it', () =
 test('an account with nothing nested under it is shown as before', () => {
   const e = nestRows([row('fixed_rent', 1), row('fixed_utilities', 2)], { rollup, hasOwn: () => true });
   assert.deepEqual(e.map(x => x.kind), ['row', 'row']);
+});
+
+test('a trip shows as one line with the total of its five accounts, and the five sit under it', () => {
+  try {
+    applyTripNames([{ slot: 1, name: 'Lisbon' }]);
+    const rows = [row('vac0_lodging', 30000), row('vac1_travel', 41230), row('vac1_lodging', 90000), row('vac1_food', 12000)];
+    const e = nestRows(rows, { rollup, hasOwn: r => r.total !== 0 });
+    const trip = e.find(x => x.key === 'vac1');
+    assert.equal(trip.kind, 'parent');
+    assert.equal(trip.name, 'Lisbon');
+    assert.equal(trip.code, '7100');
+    assert.equal(trip.data.total, 41230 + 90000 + 12000);                // the trip is the sum of what is under it
+    assert.equal(e.find(x => x.key === 'vac0').data.total, 30000);       // the "no trip yet" parent is its own family
+    assert.deepEqual(e.map(x => x.key), ['vac0', 'vac0_lodging', 'vac1', 'vac1_travel', 'vac1_lodging', 'vac1_food']);
+  } finally { applyTripNames([]); reset(); }
 });

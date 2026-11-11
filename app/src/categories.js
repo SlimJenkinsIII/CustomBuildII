@@ -8,9 +8,10 @@
 //   subscriptions -> recurring services (5200s)
 //   onetime       -> one-time purchases and annual fees (6100), planned as a monthly set-aside
 //   vacation      -> vacations (7000-7999), planned as one monthly set-aside, not part of weekly free cash.
-//                    Each trip gets a hundred-block (7100 = trip 1, 7200 = trip 2 ... up to 7900), with the same
-//                    accounts inside every block: x10 lodging, x20 flights, x30 food, x40 entertainment, ...
-//                    Block 7000 holds vacation spending not yet assigned to a trip.
+//                    Each trip is a parent account named after the trip (7100 = trip 1, 7200 = trip 2 ... up to 7900),
+//                    with the same five accounts under it every time: x10 Travel, x20 Lodging, x30 Food & drinks,
+//                    x40 Entertainment, x50 Purchases. The trip shows the sum of its five on the statements.
+//                    Parent 7000 holds vacation spending not yet assigned to a trip.
 //   free          -> flexible spending; free cash = take-home - fixed - subscriptions - set-asides - savings (5400s)
 //   savings       -> money moved into savings / investing. These are ASSET accounts (1000s), not spending.
 //   other         -> interest, gains and losses (6000-6090). Kept out of the budget math.
@@ -34,16 +35,23 @@ const c = (id, group, code, name) => [id, { id, group, code, name }];
 
 // Vacation accounts: [kind, label, offset inside the trip's block]
 export const VAC_KINDS = [
-  ['lodging', 'Lodging', 10], ['flights', 'Flights', 20], ['food', 'Food & drink', 30], ['entertainment', 'Entertainment', 40],
-  ['transport', 'Local transport', 50], ['shopping', 'Shopping & souvenirs', 60], ['other', 'Other', 90],
+  ['travel', 'Travel', 10], ['lodging', 'Lodging', 20], ['food', 'Food & drinks', 30], ['entertainment', 'Entertainment', 40], ['purchases', 'Purchases', 50],
 ];
 export const MAX_TRIPS = 9; // blocks 7100 ... 7900
+// Older saved choices used a longer list of vacation accounts. They fold into the five: flights and local transport
+// into Travel, shopping and "other" into Purchases.
+const LEGACY_VAC = { flights: 'travel', transport: 'travel', shopping: 'purchases', other: 'purchases' };
+export const migrateCategory = id => {
+  const m = /^(vac\d)_(flights|transport|shopping|other)$/.exec(id ?? '');
+  return m ? `${m[1]}_${LEGACY_VAC[m[2]]}` : id;
+};
 const vacationEntries = [];
 for (let slot = 0; slot <= MAX_TRIPS; slot++) {
+  // the trip itself: a parent account named after the trip, holding no money of its own
+  vacationEntries.push([`vac${slot}`, { id: `vac${slot}`, group: 'header', code: String(7000 + slot * 100), name: slot === 0 ? 'Vacation (no trip yet)' : `Trip ${slot}`, slot, fixed: true }]);
   for (const [kind, label, offset] of VAC_KINDS) {
     vacationEntries.push([`vac${slot}_${kind}`, {
-      id: `vac${slot}_${kind}`, group: 'vacation', code: String(7000 + slot * 100 + offset),
-      name: slot === 0 ? `No trip yet \u00b7 ${label}` : `Trip ${slot} \u00b7 ${label}`, slot, kind,
+      id: `vac${slot}_${kind}`, group: 'vacation', code: String(7000 + slot * 100 + offset), name: label, slot, kind, tripParent: `vac${slot}`,
     }]);
   }
 }
@@ -120,8 +128,11 @@ export const classOf = code => CLASSES[code[0]];
 
 export const codeLabel = id => {
   const cat = CATEGORIES[id];
+  if (cat.group === 'vacation') return `${cat.code} ${CATEGORIES[cat.tripParent].name} \u00b7 ${cat.name}`;   // "7110 Lisbon · Travel"
   return cat.code ? `${cat.code} ${cat.name}` : cat.name;
 };
+// A trip's accounts exist for trip 0 (not yet assigned) and for the trips you have added.
+const liveFor = trips => { const open = new Set([0, ...trips.map(t => t.slot)]); return x => x.slot === undefined || open.has(x.slot); };
 
 export const sourceLabel = account => {
   const a = SOURCE_ACCOUNTS[account];
@@ -130,8 +141,8 @@ export const sourceLabel = account => {
 
 // Full chart of accounts, sorted by code, each marked active (used today) or planned.
 export function chartOfAccounts(trips = []) {
-  const open = new Set([0, ...trips.map(t => t.slot)]);
-  const fromCategories = Object.values(CATEGORIES).filter(x => x.code && !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
+  const live = liveFor(trips);
+  const fromCategories = Object.values(CATEGORIES).filter(x => x.code && !(x.id in REMOVED) && live(x))
     .map(x => ({ code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: 'Active' }));
   const fromSources = Object.values(SOURCE_ACCOUNTS).map(x => ({ ...x, status: 'Active' }));
   const planned = PLANNED.map(x => ({ ...x, status: 'Planned' }));
@@ -140,20 +151,17 @@ export function chartOfAccounts(trips = []) {
     .sort((a, b) => a.code.localeCompare(b.code));
 }
 
-// Names the vacation accounts after your trips: trip 2 called "Lisbon" makes 7210 "Lisbon · Lodging".
+// Names the trip accounts after your trips: trip 2 called "Lisbon" makes 7200 "Lisbon", with 7210 Travel, 7220 Lodging and so on under it.
 export function applyTripNames(trips = []) {
-  for (let slot = 1; slot <= MAX_TRIPS; slot++) {
-    const name = trips.find(t => t.slot === slot)?.name ?? `Trip ${slot}`;
-    for (const [kind, label] of VAC_KINDS) CATEGORIES[`vac${slot}_${kind}`].name = `${name} \u00b7 ${label}`;
-  }
+  for (let slot = 1; slot <= MAX_TRIPS; slot++) CATEGORIES[`vac${slot}`].name = trips.find(t => t.slot === slot)?.name ?? `Trip ${slot}`;
 }
 
 // Categories you can pick for a transaction: everything except trip blocks that don't exist yet.
 export function selectableCategories(trips = []) {
-  const open = new Set([0, ...trips.map(t => t.slot)]);
+  const live = liveFor(trips);
   // In number order, so your own accounts sit where their number puts them, not at the end. Anything that isn't an account comes last.
   return Object.values(CATEGORIES)
-    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && (x.group !== 'vacation' || open.has(x.slot)))
+    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && live(x))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account', code: x.code ?? '9999', depth: x.code ? depthOf(x.id) : 0 }))
     .sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
 }
@@ -184,8 +192,8 @@ function accountsWith(coding) {
 // Sub accounts: you add one under any account and it takes the next free number below its parent
 // (under 1100: 1110, 1120, ...; under 5110: 5111, 5112, ...). It files and reports like its parent.
 const NO_RENAME = new Set(['transfer', 'review']);
-export const canRename = key => key in DEFAULT_NAMES && !NO_RENAME.has(key) && CATEGORIES[key]?.group !== 'vacation';
-const canParent = key => !!CATEGORIES[key] && !(key in REMOVED) && !!DEFAULT_CODES[key] && !['vacation', 'system'].includes(CATEGORIES[key].group);
+export const canRename = key => key in DEFAULT_NAMES && !NO_RENAME.has(key) && CATEGORIES[key]?.group !== 'vacation' && !CATEGORIES[key]?.fixed;
+const canParent = key => !!CATEGORIES[key] && !(key in REMOVED) && !!DEFAULT_CODES[key] && !CATEGORIES[key].fixed && !['vacation', 'system'].includes(CATEGORIES[key].group);
 
 export function cleanNames(raw) {
   const out = {};
@@ -319,7 +327,7 @@ export function applyCustoms(customs = []) {
 
 // Which account each account sits under. Built-ins come from PARENTS, your own accounts carry theirs.
 export const parentOf = id => {
-  const p = CATEGORIES[id]?.custom ? CATEGORIES[id].parent : PARENTS[id];
+  const p = CATEGORIES[id]?.custom ? CATEGORIES[id].parent : (CATEGORIES[id]?.tripParent ?? PARENTS[id]);
   return p && CATEGORIES[p] && !(p in REMOVED) ? p : undefined;
 };
 export const isHeader = id => CATEGORIES[id]?.group === 'header';
@@ -508,9 +516,9 @@ export function applyCoding(coding = {}) {
 
 // The list shown on the TB coding screen: every account you can see, in number order.
 export function codingList(trips = [], coding = {}, names = {}) {
-  const open = new Set([0, ...trips.map(t => t.slot)]);
+  const live = liveFor(trips);
   const rows = [
-    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && (x.group !== 'vacation' || open.has(x.slot)))
+    ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && live(x))
       .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
     ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true, movable: true, droppable: false, depth: depthOf(`src:${k}`), hasKids: false })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),

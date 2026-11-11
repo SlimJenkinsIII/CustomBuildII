@@ -53,7 +53,7 @@ test('the flight and lodging land in the sample trip, in its block of accounts',
   const { txs, snap } = run();
   const trip = snap.trips[0];
   assert.equal(trip.slot, 1);
-  assert.ok(txs.some(t => t.category === 'vac1_flights'));
+  assert.ok(txs.some(t => t.category === 'vac1_travel'));
   assert.ok(txs.some(t => t.category === 'vac1_lodging'));
   assert.ok(!txs.some(t => t.category.startsWith('vac0_')));
 });

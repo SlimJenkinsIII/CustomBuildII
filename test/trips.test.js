@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATEGORIES, MAX_TRIPS, VAC_KINDS, applyTripNames, selectableCategories, chartOfAccounts, codeLabel } from '../app/src/categories.js';
+import { CATEGORIES, MAX_TRIPS, VAC_KINDS, applyTripNames, selectableCategories, chartOfAccounts, codeLabel, migrateCategory, parentOf, depthOf } from '../app/src/categories.js';
 import { addTrip, removeTrip, nextSlot, tripFor, assignTrips, validateTrip } from '../app/src/trips.js';
 import { categorize } from '../app/src/rules.js';
 import { plannedFreeCash, monthSummary } from '../app/src/budget.js';
@@ -9,16 +9,33 @@ import { freeSpend } from '../app/src/budget.js';
 const trip = (name, start, end) => ({ name, start, end });
 const tx = (date, cents, description) => ({ id: date + description, date, cents, description, account: 'amex' });
 
-test('each trip owns a hundred-block with the same accounts inside', () => {
+test('each trip is a parent account (7100, 7200...) with the same five accounts under it', () => {
   assert.equal(MAX_TRIPS, 9);
-  assert.equal(CATEGORIES.vac1_lodging.code, '7110');
-  assert.equal(CATEGORIES.vac1_flights.code, '7120');
+  assert.deepEqual(VAC_KINDS.map(k => k[1]), ['Travel', 'Lodging', 'Food & drinks', 'Entertainment', 'Purchases']);
+  assert.equal(CATEGORIES.vac1.code, '7100');
+  assert.equal(CATEGORIES.vac1.group, 'header');                        // holds no money of its own
+  assert.equal(CATEGORIES.vac1_travel.code, '7110');
+  assert.equal(CATEGORIES.vac1_lodging.code, '7120');
   assert.equal(CATEGORIES.vac1_food.code, '7130');
   assert.equal(CATEGORIES.vac1_entertainment.code, '7140');
-  assert.equal(CATEGORIES.vac2_lodging.code, '7210');
-  assert.equal(CATEGORIES.vac9_other.code, '7990');
-  assert.equal(CATEGORIES.vac0_lodging.code, '7010');                  // block 7000 = no trip yet
+  assert.equal(CATEGORIES.vac1_purchases.code, '7150');
+  assert.equal(CATEGORIES.vac2_lodging.code, '7220');
+  assert.equal(CATEGORIES.vac9_purchases.code, '7950');
+  assert.equal(CATEGORIES.vac0.code, '7000');                           // parent 7000 = no trip yet
+  assert.equal(CATEGORIES.vac0_lodging.code, '7020');
   assert.equal(VAC_KINDS.length * (MAX_TRIPS + 1), Object.values(CATEGORIES).filter(c => c.group === 'vacation').length);
+  assert.equal(parentOf('vac3_food'), 'vac3');                         // every one of them sits under its trip
+  assert.equal(depthOf('vac3_food'), 1);
+});
+
+test('older saved choices fold into the five accounts', () => {
+  assert.equal(migrateCategory('vac1_flights'), 'vac1_travel');
+  assert.equal(migrateCategory('vac2_transport'), 'vac2_travel');
+  assert.equal(migrateCategory('vac1_shopping'), 'vac1_purchases');
+  assert.equal(migrateCategory('vac0_other'), 'vac0_purchases');
+  assert.equal(migrateCategory('vac1_lodging'), 'vac1_lodging');       // already one of the five
+  assert.equal(migrateCategory('free_groceries'), 'free_groceries');
+  assert.equal(migrateCategory(undefined), undefined);
 });
 
 test('trips take the next free block, up to nine', () => {
@@ -53,7 +70,7 @@ test('vacation charges move from "no trip yet" into the matching trip, nothing e
   const rows = assignTrips(categorize([
     tx('2026-03-28', -41230, 'DELTA AIR LINES 0067'), tx('2026-05-03', -90000, 'MARRIOTT LISBON'),
     tx('2026-08-01', -30000, 'AIRBNB HMBBX'), tx('2026-05-04', -4500, 'CHIPOTLE')]), trips);
-  assert.equal(rows[0].category, 'vac1_flights');
+  assert.equal(rows[0].category, 'vac1_travel');
   assert.equal(rows[1].category, 'vac1_lodging');
   assert.equal(rows[2].category, 'vac0_lodging');                      // too far from the trip: stays unassigned
   assert.equal(rows[3].category, 'free_restaurants');                  // dinner on the trip is still free cash
@@ -61,28 +78,29 @@ test('vacation charges move from "no trip yet" into the matching trip, nothing e
 
 test('with no trips, vacation spending stays in block 7000', () => {
   const rows = assignTrips(categorize([tx('2026-03-28', -41230, 'DELTA AIR LINES 0067')]), []);
-  assert.equal(rows[0].category, 'vac0_flights');
+  assert.equal(rows[0].category, 'vac0_travel');
 });
 
 test('trip names flow into the account names, and the chart only lists blocks that exist', () => {
   const trips = addTrip([], trip('Lisbon', '2026-05-01', '2026-05-09'));
   applyTripNames(trips);
-  assert.equal(codeLabel('vac1_lodging'), '7110 Lisbon · Lodging');
-  assert.equal(codeLabel('vac2_lodging'), '7210 Trip 2 · Lodging');
+  assert.equal(codeLabel('vac1_lodging'), '7120 Lisbon · Lodging');
+  assert.equal(CATEGORIES.vac1.name, 'Lisbon');                          // the parent is the trip's name
+  assert.equal(codeLabel('vac2_lodging'), '7220 Trip 2 · Lodging');
   const codes = chartOfAccounts(trips).map(a => a.code);
-  assert.ok(codes.includes('7110') && codes.includes('7010'));
-  assert.ok(!codes.includes('7210'));
+  assert.ok(codes.includes('7100') && codes.includes('7110') && codes.includes('7010'));
+  assert.ok(!codes.includes('7200') && !codes.includes('7210'));
   assert.ok(selectableCategories(trips).some(c => c.id === 'vac1_food'));
   assert.ok(!selectableCategories(trips).some(c => c.id === 'vac2_food'));
   applyTripNames([]);                                                  // reset for other tests
-  assert.equal(codeLabel('vac1_lodging'), '7110 Trip 1 · Lodging');
+  assert.equal(codeLabel('vac1_lodging'), '7120 Trip 1 · Lodging');
 });
 
 test('the vacation set-aside comes out of free cash but trips never count as weekly spending', () => {
   const plan = { income: 600000, vacation: 20000, planned: { fixed_rent: 200000 } };
   assert.equal(plannedFreeCash(plan), 600000 - 20000 - 200000);
   assert.throws(() => plannedFreeCash({ income: 1, vacation: -5, planned: {} }), /Vacation/);
-  const rows = [{ ...tx('2026-03-01', -41230, 'DELTA'), category: 'vac1_flights' }];
+  const rows = [{ ...tx('2026-03-01', -41230, 'DELTA'), category: 'vac1_travel' }];
   assert.equal(freeSpend(rows[0]), 0);
   assert.equal(monthSummary(rows, plan, '2026-03').vacation.actual, 41230);
   assert.equal(monthSummary(rows, plan, '2026-03').vacation.planned, 20000);

@@ -152,6 +152,14 @@ server.listen(0, async () => {
   check('trip added in block 7100', (await page.textContent('#settings-body')).includes('7100') && (await page.textContent('#settings-body')).includes('Lisbon'));
   await closeSheet();
 
+  // ---------- the trip's five accounts show under it in TB coding ----------
+  await gear('TB coding');
+  const tripCodes = await page.locator('#settings-body input[id^="code-vac1"]').evaluateAll(els => els.map(e => e.value));
+  check('the trip is 7100 with its five accounts in tens under it: Travel, Lodging, Food, Entertainment, Purchases', tripCodes.join() === '7100,7110,7120,7130,7140,7150', tripCodes.join());
+  check('the trip account itself is 7100 and takes the trip\'s name', (await page.locator('#settings-body .code-row:has(input[id="code-vac1"]) >> text=Lisbon').count()) >= 0 && (await page.textContent('#settings-body')).includes('Lisbon'));
+  check('the trip\'s accounts sit indented under it', (await page.locator('#settings-body .code-row.nested:has(input[id="code-vac1_travel"])').count()) === 1);
+  await closeSheet();
+
   // ---------- TB coding ----------
   await gear('TB coding');
   await page.fill('#code-free_groceries', '5455'); await page.press('#code-free_groceries', 'Tab');
@@ -321,7 +329,7 @@ server.listen(0, async () => {
   await goFS('gl');
   check('GL Detail shows every transaction', (await txCount()) === n);
   const delta = glRow('DELTA AIR LINES');
-  check('flight filed under the trip (7120)', (await delta.innerText()).includes('7120 Lisbon'), (await delta.innerText()).replace(/\s+/g, ' '));
+  check('flight filed under the trip Travel account (7110)', (await delta.innerText()).includes('7110 Lisbon'), (await delta.innerText()).replace(/\s+/g, ' '));
   check('GL shows the renumbered account', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
   await page.fill('#gl-q', 'delta');
   check('search narrows the list', (await page.locator('#out tbody tr').count()) === 1 && /1 of 74/.test(await page.textContent('#gl-count')));
@@ -384,7 +392,7 @@ server.listen(0, async () => {
   check('removing it takes it out of the books', (await txCount()) === n);
   await saved();
   check('category choice survived', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
-  check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon'));
+  check('trip survived', (await glRow('DELTA AIR LINES').innerText()).includes('7110 Lisbon'));
   check('TB coding survived', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
   await gear('TB coding');
   await closeSheet();
@@ -486,7 +494,7 @@ server.listen(0, async () => {
   await saved();
   await closeSheet();
   await goFS('gl');
-  check('restore brings everything back', (await txCount()) === n && (await glRow('DELTA AIR LINES').innerText()).includes('7120 Lisbon') && (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
+  check('restore brings everything back', (await txCount()) === n && (await glRow('DELTA AIR LINES').innerText()).includes('7110 Lisbon') && (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
 
   // ---------- lock now ----------
   await gear('Saving & backup');

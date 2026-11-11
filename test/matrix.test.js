@@ -92,7 +92,7 @@ test('net operating income = income less fixed, subscriptions, free cash and rev
   assert.equal(netOp, sub('Total income') - sub('Total fixed monthly expenses') - sub('Total subscriptions') - sub('Total free cash') - review);
   const netIncome = net(m, 'Net income (loss)').byMonth['2026-01'];
   assert.equal(netIncome, netOp + sub('Total other income & loss') + sub('Total vacations'));
-  assert.equal(row(m, 'vac0_flights').byMonth['2026-01'], -41230);      // the made-up January flight
+  assert.equal(row(m, 'vac0_travel').byMonth['2026-01'], -41230);      // the made-up January flight
 });
 
 test('table sections appear in GL-code order', () => {

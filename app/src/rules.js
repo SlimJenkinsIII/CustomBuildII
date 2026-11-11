@@ -21,9 +21,9 @@ export const defaultRules = [
   ...r('fixed_rent', 'out', 'APARTMENTS', 'PROPERTY MANAGEMENT', 'LEASING'),
   ...r('free_shopping', 'out', 'AMAZON', 'AMZN MKTP', 'TARGET', 'ULTA BEAUTY'),
   // Vacation spending lands in "no trip yet" (block 7000); trips.js moves it into a trip by date.
-  ...r('vac0_flights', 'out', 'DELTA AIR LINES', 'UNITED AIRLINES', 'SOUTHWEST AIRLINES', 'AMERICAN AIRLINES'),
+  ...r('vac0_travel', 'out', 'DELTA AIR LINES', 'UNITED AIRLINES', 'SOUTHWEST AIRLINES', 'AMERICAN AIRLINES'),
   ...r('vac0_lodging', 'out', 'AIRBNB', 'MARRIOTT', 'HILTON', 'HYATT', 'VRBO', 'HOTELS.COM'),
-  ...r('vac0_other', 'out', 'EXPEDIA'),
+  ...r('vac0_travel', 'out', 'EXPEDIA'),
   ...r('other_interest', 'in', 'INTEREST PAYMENT', 'INTEREST PAID', 'INTEREST EARNED'),
   ...r('other_interest_exp', 'out', 'INTEREST CHARGE', 'FINANCE CHARGE'),
   ...r('save_chase', 'out', 'TRANSFER TO SAV'),

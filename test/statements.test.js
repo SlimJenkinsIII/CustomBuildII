@@ -37,7 +37,7 @@ test('accounts are sorted by what they are: things you have, things you owe, equ
   assert.equal(sectionOf('free_groceries'), 'pnl');
   assert.equal(sectionOf('income_paycheck'), 'pnl');
   assert.equal(sectionOf('onetime_annual'), 'pnl');
-  assert.equal(sectionOf('vac1_flights'), 'pnl');
+  assert.equal(sectionOf('vac1_travel'), 'pnl');
 });
 
 test('the opening column: what you have, what you owe, and the equity that makes it balance', () => {

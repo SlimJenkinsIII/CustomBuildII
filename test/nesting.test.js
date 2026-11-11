@@ -73,3 +73,59 @@ test('a trip shows as one line with the total of its five accounts, and the five
     assert.deepEqual(e.map(x => x.key), ['vac0', 'vac0_lodging', 'vac1', 'vac1_travel', 'vac1_lodging', 'vac1_food']);
   } finally { applyTripNames([]); reset(); }
 });
+
+import { isHidden } from '../app/src/nesting.js';
+import { parentAccounts } from '../app/src/categories.js';
+
+test('a main account is shown even when nothing under it has any activity, with zeros', () => {
+  try {
+    const hdr = addAccount([], {}, 'header', 'Investments', '', { section: '1' }); applyCustoms(hdr.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, 'save_invest', hdr.id);
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const mains = parentAccounts([]).filter(m => m.class === 'Assets');
+    assert.deepEqual(mains.map(m => m.name), ['Investments']);
+    const e = nestRows([], { rollup, hasOwn: () => false, ghosts: mains });
+    assert.deepEqual(e.map(x => [x.kind, x.name]), [['parent', 'Investments']]);
+    assert.equal(e[0].data.total, 0);
+  } finally { reset(); }
+});
+
+test('main accounts come out in number order among the rows, and a real one is not shown twice', () => {
+  try {
+    const hdr = addAccount([], {}, 'header', 'Savings', '', { section: '1' }); applyCustoms(hdr.customs);
+    let st = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, 'save_chase', hdr.id);
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const rows = [{ ...row('src:chase-checking', 500), code: '1000', name: 'Chase checking' }, { ...row('save_chase', 300) }];
+    const e = nestRows(rows, { rollup, hasOwn: r => r.total !== 0, ghosts: parentAccounts([]).filter(m => m.class === 'Assets') });
+    assert.deepEqual(e.map(x => x.name), ['Chase checking', 'Savings', 'Chase Savings']);
+    assert.equal(e.filter(x => x.key === hdr.id).length, 1);
+    assert.equal(e[1].data.total, 300);                                   // the parent adds up what is under it
+  } finally { reset(); }
+});
+
+test('what is folded away is hidden: an entry is shown only when everything above it is open', () => {
+  try {
+    const a = addAccount([], {}, 'subscriptions', 'Netflix'); applyCustoms(a.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: a.customs }, a.id, 'sub_streaming');
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const e = nestRows([row('sub_streaming', 1000), row(a.id, 1599)], { rollup, hasOwn: r => r.total !== 0 });
+    const by = Object.fromEntries(e.map(x => [`${x.kind}:${x.key}`, x]));
+    const open = new Set();
+    assert.equal(isHidden(by['parent:sub_streaming'], k => open.has(k)), false);                  // the main account itself always shows
+    assert.equal(isHidden(by[`row:${a.id}`], k => open.has(k)), true);                            // a sub account is folded away
+    assert.equal(isHidden(by['own:sub_streaming'], k => open.has(k)), true);                      // and so is the main account's own "(other)" line
+    open.add('sub_streaming');
+    assert.equal(isHidden(by[`row:${a.id}`], k => open.has(k)), false);
+    assert.equal(isHidden(by['own:sub_streaming'], k => open.has(k)), false);
+  } finally { reset(); }
+});
+
+test('trips are main accounts once added, and "no trip yet" is not forced', () => {
+  const none = parentAccounts([]).map(m => m.key);
+  assert.ok(!none.includes('vac1') && !none.includes('vac0'));
+  applyTripNames([{ slot: 1, name: 'Lisbon' }]);
+  const withTrip = parentAccounts([{ slot: 1, name: 'Lisbon' }]);
+  applyTripNames([]);
+  assert.ok(withTrip.some(m => m.key === 'vac1' && m.name === 'Lisbon' && m.code === '7100'));
+  assert.ok(!withTrip.some(m => m.key === 'vac0'));
+});

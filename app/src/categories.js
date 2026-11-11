@@ -335,6 +335,18 @@ export const parentOf = id => {
   const p = CATEGORIES[id]?.custom ? CATEGORIES[id].parent : (CATEGORIES[id]?.tripParent ?? PARENTS[id]);
   return p && CATEGORIES[p] && !(p in REMOVED) ? p : undefined;
 };
+// The main accounts: every account with something under it, so statements can show them even before anything has been uploaded.
+// A trip appears once you have added it; "no trip yet" only when it has something in it.
+export function parentAccounts(trips = []) {
+  const live = liveFor(trips);
+  const kids = new Set();
+  for (const x of Object.values(CATEGORIES)) if (x.code && !(x.id in REMOVED) && live(x) && x.id !== 'review') { const p = parentOf(x.id); if (p) kids.add(p); }
+  for (const k of Object.keys(SOURCE_ACCOUNTS)) { const p = parentOf(`src:${k}`); if (p) kids.add(p); }
+  return [...kids].filter(k => CATEGORIES[k] && !(k in REMOVED) && live(CATEGORIES[k]) && k !== 'vac0')
+    .map(k => ({ key: k, code: CATEGORIES[k].code, name: CATEGORIES[k].name, class: classOf(CATEGORIES[k].code) }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+}
+
 export const isHeader = id => CATEGORIES[id]?.group === 'header';
 // The parent accounts above one account, outermost first.
 export const headersAbove = id => { const out = []; for (let at = parentOf(id); at && out.length < 4; at = parentOf(at)) if (isHeader(at)) out.unshift(at); return out; };

@@ -2,14 +2,14 @@ import { parseStatement, toCents } from './parsers.js';
 import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
-import { nestRows, addMaps } from './nesting.js';
+import { nestRows, addMaps, isHidden } from './nesting.js';
 import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { parentAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -30,7 +30,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], sync: null,
-  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
+  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, open: (() => { try { return new Set(JSON.parse(localStorage.getItem('my-budget-open') ?? '[]')); } catch { return new Set(); } })(), period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
@@ -1078,9 +1078,28 @@ const indentLevel = key => (key ? depthOf(key) : 0);
 const indentClass = key => (indentLevel(key) ? ' sub-acct' : '');
 const indentStyle = key => (indentLevel(key) ? `--depth:${indentLevel(key)}` : null);
 // A parent account's row: bold, with the sum of what is under it. Its own money, if any, sits on an indented "(other)" line.
+// Folding: click a main account to show or hide what is under it. Which ones are open is remembered on this device.
+const parentKeysSeen = new Set();
+const isOpen = key => state.open.has(key);
+const saveOpen = () => { try { localStorage.setItem('my-budget-open', JSON.stringify([...state.open])); } catch { /* it just starts folded next time */ } };
+const refreshFS = focusId => { if (state.txs.length && !state.locked) renderFS(asOfDate(state.txs), focusId); };
+const toggleOpen = key => { if (state.open.has(key)) state.open.delete(key); else state.open.add(key); saveOpen(); refreshFS(`tw-${key}`); };
+const setAllOpen = on => { state.open = on ? new Set(parentKeysSeen) : new Set(); saveOpen(); refreshFS(); };
+const expandControls = () => h('span', { class: 'fs-expand' },
+  h('button', { type: 'button', class: 'linkbtn expand-all', text: 'Expand all', onclick: () => setAllOpen(true) }),
+  h('button', { type: 'button', class: 'linkbtn collapse-all', text: 'Collapse all', onclick: () => setAllOpen(false) }));
+// What goes in the account cell: a fold button for a main account, then its number and name.
+const acctLabel = e => {
+  if (e.kind === 'parent') parentKeysSeen.add(e.key);
+  return [e.kind === 'parent' && h('button', { type: 'button', class: 'twisty', id: `tw-${e.key}`, 'aria-expanded': String(isOpen(e.key)),
+    'aria-label': `${isOpen(e.key) ? 'Hide' : 'Show'} what is under ${e.name}`, text: isOpen(e.key) ? '\u25BE' : '\u25B8', onclick: () => toggleOpen(e.key) }),
+    e.code && h('span', { class: 'code', text: e.code }), e.name];
+};
 const entryRow = (e, extra = '') => h('tr', { class: e.kind === 'parent' ? 'parent-row' : '' },
-  h('td', { class: 'acct' + indentClass(e.key) + (e.kind === 'own' ? ' own-line' : ''), style: e.kind === 'own' ? `--depth:${indentLevel(e.key) + 1}` : indentStyle(e.key) },
-    e.code && h('span', { class: 'code', text: e.code }), e.name));
+  h('td', { class: 'acct' + indentClass(e.key) + (e.kind === 'own' ? ' own-line' : ''), style: e.kind === 'own' ? `--depth:${indentLevel(e.key) + 1}` : indentStyle(e.key) }, acctLabel(e)));
+
+const CLASS_ORDER = ['Assets', 'Liabilities', 'Equity', 'Revenue', 'Expenses', 'Other income / loss', 'Vacations'];
+const zeroMonths = months => Object.fromEntries(months.map(m => [m, 0]));
 
 // The three statement pages are drawn together, so a change of year shows on all of them.
 function renderFS(asOf, focusId) {
@@ -1115,11 +1134,14 @@ function renderTrialBalance(asOf) {
   const body = h('tbody');
   const span = bal ? 14 : 13;
   const rollupTb = list => ({ openBal: list.reduce((t, r) => t + r.openBal, 0), change: list.reduce((t, r) => t + r.change, 0), total: list.reduce((t, r) => t + r.total, 0),
-    byMonth: addMaps(list.map(r => r.byMonth)), balByMonth: addMaps(list.map(r => r.balByMonth)) });
+    byMonth: addMaps([zeroMonths(tb.months), ...list.map(r => r.byMonth)]), balByMonth: addMaps([zeroMonths(tb.months), ...list.map(r => r.balByMonth)]) });
+  const mains = parentAccounts(state.trips);
   const ownTb = r => r.openBal !== 0 || tb.months.some(ym => r.byMonth[ym] !== 0 || r.balByMonth[ym] !== 0);
-  for (const cls of [...new Set(shown.map(r => r.class))]) {
+  const classes = [...new Set([...shown.map(r => r.class), ...mains.map(m => m.class)])].sort((a, b) => CLASS_ORDER.indexOf(a) - CLASS_ORDER.indexOf(b));
+  for (const cls of classes) {
     body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: cls }), h('td', { colspan: span })));
-    for (const e of nestRows(shown.filter(r => r.class === cls), { rollup: rollupTb, hasOwn: ownTb })) {
+    for (const e of nestRows(shown.filter(r => r.class === cls), { rollup: rollupTb, hasOwn: ownTb, ghosts: mains.filter(m => m.class === cls) })) {
+      if (isHidden(e, isOpen)) continue;
       const d = e.data, tr = entryRow(e);
       if (bal) tr.append(h('td', { text: whole(d.openBal) }));
       tb.months.forEach((ym, i) => {
@@ -1163,7 +1185,7 @@ function renderTrialBalance(asOf) {
   const select = h('select', { id: 'year-tb', 'aria-label': 'Year', onchange: e => { state.year = e.target.value; renderFS(asOf, 'year-tb'); } },
     years.map(y => h('option', { value: y, text: y, selected: y === state.year })));
   fill($('fs-tb'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'fs-tb-title', text: bal ? 'Trial balance, month end' : 'Trial balance, monthly activity' }), h('div', { class: 'row-form' }, viewToggle(asOf), select)),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-tb-title', text: bal ? 'Trial balance, month end' : 'Trial balance, monthly activity' }), h('div', { class: 'row-form' }, expandControls(), viewToggle(asOf), select)),
     !tb.hasOpening && h('div', { class: 'notice' }, h('span', { text: 'No opening balances yet, so balances start from zero. Enter what each account held on your opening date to tie to your statements.' }),
       h('button', { class: 'btn', type: 'button', text: 'Enter opening balances', onclick: () => openSettings('opening') })),
     before > 0 && h('p', { class: 'note', text: `${plural(before, 'transaction', 'transactions')} dated on or before ${fmtFull(state.opening.date)} ${before === 1 ? 'is' : 'are'} before the books start and ${before === 1 ? 'isn’t' : 'aren’t'} in this view.` }),
@@ -1232,9 +1254,11 @@ function renderBalanceSheet(asOf) {
   // A section's accounts: parents first with the sum of what is under them, then their sub accounts, indented.
   const sectionRows = (group, rows) => {
     const withWas = rows.map(r => ({ ...r, was: mo ? prior(group, r) : 0 }));
-    const rollup = list => ({ open: list.reduce((t, r) => t + r.open, 0), was: list.reduce((t, r) => t + r.was, 0), byMonth: addMaps(list.map(r => r.byMonth)) });
+    const rollup = list => ({ open: list.reduce((t, r) => t + r.open, 0), was: list.reduce((t, r) => t + r.was, 0), byMonth: addMaps([zeroMonths(bs.months), ...list.map(r => r.byMonth)]) });
     const hasOwn = r => r.open !== 0 || bs.months.some(ym => r.byMonth[ym] !== 0);
-    for (const e of nestRows(withWas, { rollup, hasOwn })) {
+    const cls = { assets: 'Assets', liabilities: 'Liabilities', equity: 'Equity' }[group];
+    for (const e of nestRows(withWas, { rollup, hasOwn, ghosts: parentAccounts(state.trips).filter(m => m.class === cls) })) {
+      if (isHidden(e, isOpen)) continue;
       const tr = entryRow(e);
       numbers(tr, e.data, e.data.was, e.kind !== 'parent');
       body.append(tr);
@@ -1249,7 +1273,7 @@ function renderBalanceSheet(asOf) {
   header('Assets');
   sectionRows('assets', bs.assets.rows);
   totalRow('Total assets', 'assets', bs.assets, 'tot');
-  if (bs.liabilities.rows.length) {
+  if (bs.liabilities.rows.length || parentAccounts(state.trips).some(m => m.class === 'Liabilities')) {
     header('Liabilities');
     sectionRows('liabilities', bs.liabilities.rows);
     totalRow('Total liabilities', 'liabilities', bs.liabilities, 'tot');
@@ -1265,7 +1289,7 @@ function renderBalanceSheet(asOf) {
 
   const balanced = bs.difference.open === 0 && bs.months.every(ym => !shown(ym) || bs.difference.byMonth[ym] === 0);
   fill($('fs-bs'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'fs-bs-title', text: mo ? `Balance sheet, ${MONTH_NAMES[mi]} ${state.year}` : `Balance sheet, ${state.year}` }), periodPickers(asOf, 'bs')),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-bs-title', text: mo ? `Balance sheet, ${MONTH_NAMES[mi]} ${state.year}` : `Balance sheet, ${state.year}` }), h('div', { class: 'row-form' }, expandControls(), periodPickers(asOf, 'bs'))),
     !bs.hasOpening && h('div', { class: 'notice' }, h('span', { text: 'No opening balances yet, so every balance starts from zero. Enter what each account held on your opening date to tie to your statements.' }),
       h('button', { class: 'btn', type: 'button', text: 'Enter opening balances', onclick: () => openSettings('opening') })),
     h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
@@ -1417,7 +1441,7 @@ function renderMatrix(asOf) {
   // One line of the statement. entry (optional) says it is a parent's sum or an "(other)" line, which changes how the label looks.
   const lineRow = (l, entry) => {
     const cls = entry ? (entry.kind === 'parent' ? 'parent-row' : '') : { row: '', subtotal: 'tot', net: 'net', running: 'run' }[l.kind];
-    const label = entry ? [entry.code && h('span', { class: 'code', text: entry.code }), entry.name] : [l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label];
+    const label = entry ? acctLabel(entry) : [l.code && h('span', { class: 'code', text: l.code }), l.name ?? l.label];
     const key = entry?.key ?? (l.kind === 'row' ? l.id : null);
     const own = entry?.kind === 'own';
     const tr = h('tr', { class: cls }, h('td', { class: 'acct' + (key ? indentClass(key) : '') + (own ? ' own-line' : ''),
@@ -1450,7 +1474,7 @@ function renderMatrix(asOf) {
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
       const rows = [];
       while (m.lines[i + 1]?.kind === 'row') rows.push({ ...m.lines[++i], key: m.lines[i].id });
-      for (const e of nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 })) lineRow(e.kind === 'parent' ? e.data : e.data, e);
+      for (const e of nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 })) { if (!isHidden(e, isOpen)) lineRow(e.data, e); }
       continue;
     }
     if (mo && l.kind === 'running') continue;
@@ -1458,7 +1482,7 @@ function renderMatrix(asOf) {
   }
 
   fill($('fs-is'),
-    h('div', { class: 'card-head' }, h('h2', { id: 'fs-is-title', text: mo ? `Income statement, ${MONTH_NAMES[mi]} ${state.year}` : `Income statement, ${state.year}` }), periodPickers(asOf, 'is')),
+    h('div', { class: 'card-head' }, h('h2', { id: 'fs-is-title', text: mo ? `Income statement, ${MONTH_NAMES[mi]} ${state.year}` : `Income statement, ${state.year}` }), h('div', { class: 'row-form' }, expandControls(), periodPickers(asOf, 'is'))),
     h('div', { class: 'mx-wrap' }, h('table', { class: 'mx' }, h('thead', {}, head), body)),
     h('div', { class: 'mx-legend' },
       !mo && m.fullMonthCount >= 3 && h('span', {}, h('i', { style: 'background:var(--tint-watch)' }), 'Well above that line’s monthly average'),

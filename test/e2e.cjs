@@ -261,6 +261,23 @@ server.listen(0, async () => {
   check('TB Summary shows the new name', /Cafes/.test(await page.locator('#fs-tb').textContent()));
   const tbText = await page.locator('#fs-tb').textContent();
   check('TB Summary heads each group with its parent account', /1000\s*Checking/.test(tbText) && /1200\s*Savings/.test(tbText), 'Checking and Savings head their accounts');
+  // main accounts are always there, folded; clicking one opens it and clicking again folds it back
+  const tbAll = await page.locator('#fs-tb').textContent();
+  check('main accounts show even with nothing uploaded under them yet (Investments, Accounts Receivable)', /1400\s*Investments/.test(tbAll) && /1300\s*Accounts Receivable/.test(tbAll));
+  check('they start folded: nothing is indented under them yet', (await page.locator('#fs-tb td.acct.sub-acct').count()) === 0 && (await page.locator('#fs-tb .twisty').count()) >= 3);
+  const first = page.locator('#fs-tb .twisty').first();
+  const firstKey = (await first.getAttribute('id')).replace('tw-', '');
+  await first.click();
+  check('clicking a main account opens it to show what is under it', (await page.locator('[id="tw-' + firstKey + '"]').first().getAttribute('aria-expanded')) === 'true' && (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 1);
+  check('the choice is remembered on this device', (await page.evaluate(() => localStorage.getItem('my-budget-open'))).includes(firstKey));
+  await page.locator('[id="tw-' + firstKey + '"]').first().click();
+  check('clicking it again folds it away', (await page.locator('#fs-tb td.acct.sub-acct').count()) === 0);
+  await goFS('bs');
+  check('the Balance Sheet shows the same main accounts, folded', /Investments/.test(await page.locator('#fs-bs').textContent()) && (await page.locator('#fs-bs td.acct.sub-acct').count()) === 0);
+  await page.click('#fs-bs .expand-all');
+  check('Expand all opens every main account, on every page', (await page.locator('#fs-bs td.acct.sub-acct').count()) >= 1);
+  await goFS('tb');
+  check('and the other pages follow', (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 1);
   await goFS('is');
   const isRowBy = async (sel, text) => page.locator(`#fs-is tbody tr${sel}`).filter({ hasText: text }).first();
   const lastCell = async tr => Number((await tr.locator('td').last().textContent()).replace(/[(),\s]/g, '').replace('\u2013', '0'));

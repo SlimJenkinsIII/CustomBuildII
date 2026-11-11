@@ -14,21 +14,30 @@ export function addMaps(maps) {
 
 // rows: one section's rows in number order, each with { key, code, name }.
 // rollup(list) makes the numbers for a parent from the rows under it; hasOwn(row) says whether a row has figures of its own.
-// Returns entries: { kind: 'row' | 'parent' | 'own', key, code, name, data }.
-export function nestRows(rows, { rollup, hasOwn }) {
+// ghosts: parent accounts to show even when nothing is under them yet ({ key, code, name }), so your main accounts are always there.
+// Returns entries: { kind: 'row' | 'parent' | 'own', key, code, name, data, ancestors }. `ancestors` lists what each entry sits under,
+// nearest first (for an "(other)" line it starts with its own parent), so a statement can hide whatever is folded away.
+export function nestRows(rows, { rollup, hasOwn, ghosts = [] }) {
+  const all = [...rows];
+  for (const g of ghosts) {
+    if (all.some(r => r.key === g.key)) continue;
+    const at = all.findIndex(r => r.code > g.code);
+    all.splice(at < 0 ? all.length : at, 0, { ...g, ghost: true });
+  }
   const below = key => rows.filter(r => r.key !== key && ancestorsOf(r.key).includes(key));
   const out = [], seen = new Set();
-  for (const r of rows) {
-    for (const hk of headersAbove(r.key)) {
-      if (seen.has(hk)) continue;
-      seen.add(hk);
-      out.push({ kind: 'parent', key: hk, code: CATEGORIES[hk].code, name: CATEGORIES[hk].name, data: rollup(below(hk)) });
-    }
+  const parent = (key, code, name, list) => { seen.add(key); out.push({ kind: 'parent', key, code, name, data: rollup(list), ancestors: ancestorsOf(key) }); };
+  for (const r of all) {
+    for (const hk of headersAbove(r.key)) if (!seen.has(hk)) parent(hk, CATEGORIES[hk].code, CATEGORIES[hk].name, below(hk));
+    if (r.ghost) { if (!seen.has(r.key)) parent(r.key, r.code, r.name, below(r.key)); continue; }
     const kids = below(r.key);
     if (kids.length) {
-      out.push({ kind: 'parent', key: r.key, code: r.code, name: r.name, data: rollup([r, ...kids]) });
-      if (hasOwn(r)) out.push({ kind: 'own', key: r.key, code: '', name: `${r.name} (other)`, data: r });
-    } else out.push({ kind: 'row', key: r.key, code: r.code, name: r.name, data: r });
+      parent(r.key, r.code, r.name, [r, ...kids]);
+      if (hasOwn(r)) out.push({ kind: 'own', key: r.key, code: '', name: `${r.name} (other)`, data: r, ancestors: [r.key, ...ancestorsOf(r.key)] });
+    } else out.push({ kind: 'row', key: r.key, code: r.code, name: r.name, data: r, ancestors: ancestorsOf(r.key) });
   }
   return out;
 }
+
+// True when something is folded away above this entry.
+export const isHidden = (entry, isOpen) => entry.ancestors.some(a => !isOpen(a));

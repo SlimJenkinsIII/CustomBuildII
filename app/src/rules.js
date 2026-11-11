@@ -5,6 +5,12 @@ import { CATEGORIES } from './categories.js';
 
 const r = (category, sign, ...contains) => contains.map(text => ({ contains: text, category, ...(sign && { sign }) }));
 
+// Gas stations and the chains that sell fuel. They file as gas (free cash) by default; if you turn on "split gas-station
+// charges by amount" (Coding tab), small charges there are treated as convenience-store purchases instead. See fuel.js.
+export const FUEL_MERCHANTS = ['SHELL OIL', 'SHELL', 'EXXON', 'CHEVRON', 'QUIKTRIP', 'QT', 'WAWA', 'SHEETZ', 'RACETRAC', 'CIRCLE K', 'SPEEDWAY', 'MURPHY USA',
+  'MURPHY EXPRESS', 'MARATHON PETRO', 'BP', 'VALERO', 'SUNOCO', 'CITGO', 'TEXACO', 'PHILLIPS 66', 'CONOCO', 'LOVES', 'PILOT TRAVEL', 'FLYING J', 'CASEYS',
+  'KWIK TRIP', 'BUC-EE', 'BUCEES', 'THORNTONS', 'STOP N GO'];
+
 // Starter guesses. The real wording on YOUR statements will differ, so expect to add your own rules.
 export const defaultRules = [
   ...r('income_paycheck', 'in', 'PAYROLL'),
@@ -17,7 +23,7 @@ export const defaultRules = [
   ...r('free_coffee', 'out', 'BLUE BOTTLE', 'STARBUCKS', 'PEETS'),
   ...r('free_restaurants', 'out', 'CHIPOTLE', 'DOORDASH', 'UBER EATS', 'GRUBHUB', 'MCDONALDS'),
   ...r('free_alcohol', 'out', 'TOTAL WINE', 'SPECS', 'BEVMO'),
-  ...r('free_transport', 'out', 'SHELL OIL', 'SHELL', 'EXXON', 'CHEVRON', 'UBER', 'LYFT'),
+  ...r('free_transport', 'out', ...FUEL_MERCHANTS, 'UBER', 'LYFT'),
   ...r('fixed_rent', 'out', 'APARTMENTS', 'PROPERTY MANAGEMENT', 'LEASING'),
   ...r('free_shopping', 'out', 'AMAZON', 'AMZN MKTP', 'TARGET', 'ULTA BEAUTY'),
   // Vacation spending lands in "no trip yet" (block 7000); trips.js moves it into a trip by date.

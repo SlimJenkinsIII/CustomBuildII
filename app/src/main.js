@@ -3,6 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
@@ -26,7 +27,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -75,7 +76,7 @@ function recompute() {
   applyParents(state.parents);
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(applyLearned(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.learned, id => !!CATEGORIES[id]), state.trips);
+  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -116,7 +117,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -131,13 +132,14 @@ function loadSnapshot(d) {
   applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
   state.learned = cleanLearned(Object.fromEntries(Object.entries(d.learned ?? {}).map(([k, r]) => [k, r && { ...r, c: migrateCategory(r.c) }])), id => !!CATEGORIES[id]);
+  state.fuel = cleanFuel(d.fuel, id => !!CATEGORIES[migrateCategory(id)]);
   state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -549,9 +551,38 @@ function renderCoding() {
     h('div', { class: 'mx-wrap' }, head),
     h('p', { class: 'note', text: 'Tick items, or tap “Same merchant” to tick every charge from it. Hold Shift to tick a range. Pick an account once and tap Apply. The app remembers each merchant you code and files the rest the same way.' }),
     h('div', { id: 'code-more' }),
+    fuelCard(),
     learnedList());
   renderCodingRows();
 }
+// Gas stations sell fuel and snacks under one name. When switched on, small charges there go to the account you pick
+// (a convenience store, say) and the rest stay as gas. Changes apply straight away to every charge, past and future.
+function fuelCard() {
+  const f = state.fuel;
+  const guess = f.below || (selectableCategories(state.trips).find(c => /conven|snack/i.test(CATEGORIES[c.id].name))?.id ?? '');
+  const apply = change => {
+    state.fuel = cleanFuel({ ...state.fuel, ...change }, id => !!CATEGORIES[id]);
+    recompute(); render(); markDirty();
+    const d = $('code-fuel'); if (d) d.open = true;
+  };
+  const choose = h('select', { id: 'fuel-below', 'aria-label': 'Account for small gas-station charges', onchange: e => apply({ below: e.target.value }) },
+    h('option', { value: '', text: 'Choose an account…' }), categoryOptions(guess));
+  return h('details', { class: 'fine', id: 'code-fuel', open: f.on },
+    h('summary', { text: `Gas stations${f.on ? ': splitting by amount' : ''}` }),
+    h('div', { style: 'display:flex;flex-direction:column;gap:10px;padding-top:8px' },
+      h('p', { class: 'note', text: 'A gas station charges one name for fuel and for snacks. This tells them apart by size: small charges go to the account you choose, big ones stay as gas.' }),
+      h('div', { class: 'row-form' },
+        h('button', { type: 'button', class: 'switch', role: 'switch', id: 'fuel-on', 'aria-checked': String(f.on), 'aria-label': 'Split gas-station charges by amount',
+          onclick: () => apply({ on: !state.fuel.on, below: state.fuel.below || $('fuel-below').value || guess }) }),
+        h('span', { text: 'Split gas-station charges by amount' })),
+      h('div', { class: 'row-form' },
+        h('span', { text: 'Charges under $' }),
+        h('input', { id: 'fuel-cutoff', type: 'text', inputmode: 'decimal', size: '4', value: String(f.cutoff / 100), 'aria-label': 'Cutoff in dollars',
+          onchange: e => { const c = toCents(e.target.value); if (!(c >= 100)) { e.target.value = String(state.fuel.cutoff / 100); return; } apply({ cutoff: c }); } }),
+        h('span', { text: 'go to' }), choose),
+      h('p', { class: 'note', text: `At or over $${f.cutoff / 100} they stay in ${CATEGORIES.free_transport.name} (${CATEGORIES.free_transport.code}). Anything you code by hand on a single charge still wins.` })));
+}
+
 // What the app has learned from you: each merchant and where it files. Forget one and it goes back to the app's own judgement.
 function learnedList() {
   const entries = Object.entries(state.learned).filter(([, r]) => CATEGORIES[r.c]).sort((a, b) => a[0].localeCompare(b[0]));

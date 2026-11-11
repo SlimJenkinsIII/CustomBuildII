@@ -61,9 +61,12 @@ export function rangeBetween(ids, a, b) {
 // Some names cover many kinds of purchase, so choosing one of them teaches nothing.
 const GENERIC = new Set(['AMAZON', 'AMZN', 'PAYPAL', 'VENMO', 'ZELLE', 'CASH', 'SQUARE', 'APPLE', 'GOOGLE', 'PAYMENT', 'ONLINE', 'TRANSFER', 'ATM', 'CHECK', 'WITHDRAWAL', 'DEPOSIT', 'MOBILE', 'WIRE', 'FEE', 'INTEREST', 'EBAY', 'ETSY', 'WALMART', 'TARGET', 'COSTCO']);
 
+import { isFuelStop } from './fuel.js';
+
 // What to remember a charge by, or null when it isn't safe to (too vague, or a name that covers everything).
 export function learnKey(description) {
   const key = merchantKey(description);
+  if (isFuelStop(description)) return null;                      // gas stations are split by amount instead of remembered whole
   if (key.replace(/ /g, '').length < 3) return null;
   if (GENERIC.has(key.split(' ')[0])) return null;
   return key;

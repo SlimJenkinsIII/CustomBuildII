@@ -8,7 +8,7 @@ import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
-import { assignTrips, addTrip, removeTrip } from './trips.js';
+import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
 import { trialBalance, balanceSheet, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
 import { createVault, seal, unlock, openWith } from './vault.js';
 import { memoryStorage, indexedDbStorage } from './storage.js';
@@ -1646,7 +1646,8 @@ function renderCodingScreen(body) {
   };
   const rename = (key, value, input) => {
     try {
-      state.names = setName(state.names, key, value);
+      if (/^vac[1-9]$/.test(key)) state.trips = updateTrip(state.trips, Number(key.slice(3)), { name: value });     // a trip is renamed here too
+      else state.names = setName(state.names, key, value);
       refresh(`name-${key}`);
     } catch (err) {
       input.value = codingList(state.trips, state.coding, state.names).find(r => r.key === key).name;
@@ -1658,16 +1659,34 @@ function renderCodingScreen(body) {
   const byKey = Object.fromEntries(list.map(r => [r.key, r]));
 
   // Add an account. It takes the next free standard number in its section; drag it to wherever it belongs.
-  const kindSel = h('select', { id: 'acct-kind', 'aria-label': 'What kind of account' }, ADD_KINDS.map(([k, label]) => h('option', { value: k, text: label })));
+  const kindSel = h('select', { id: 'acct-kind', 'aria-label': 'What kind of account' }, [...ADD_KINDS, ['trip', 'Vacation (a trip, with its own five accounts)']].map(([k, label]) => h('option', { value: k, text: label })));
   const acctName = h('input', { id: 'acct-name', type: 'text', maxlength: '60', placeholder: 'Account name', 'aria-label': 'Account name' });
   const acctMatch = h('input', { id: 'acct-match', type: 'text', maxlength: '80', placeholder: 'Charges containing… e.g. NETFLIX (optional)', 'aria-label': 'Auto-file charges containing' });
   const acctNumber = h('input', { id: 'acct-number', type: 'text', inputmode: 'numeric', maxlength: '4', placeholder: 'Number (optional)', 'aria-label': 'Account number, optional' });
   const sectionSel = h('select', { id: 'acct-section', 'aria-label': 'Section for the parent account', hidden: true },
     SECTIONS.map(([d, label]) => h('option', { value: d, text: `${label} (${d}000s)`, selected: d === '1' })));
-  kindSel.addEventListener('change', () => { const header = kindSel.value === 'header'; sectionSel.hidden = !header || !!acctNumber.value; acctMatch.hidden = header; });
+  const tripStart = h('input', { id: 'acct-start', type: 'date', hidden: true, 'aria-label': 'Trip start' });
+  const tripEnd = h('input', { id: 'acct-end', type: 'date', hidden: true, 'aria-label': 'Trip end' });
+  kindSel.addEventListener('change', () => {
+    const header = kindSel.value === 'header', trip = kindSel.value === 'trip';
+    sectionSel.hidden = !header || !!acctNumber.value;
+    acctMatch.hidden = header || trip; acctNumber.hidden = trip;
+    tripStart.hidden = !trip; tripEnd.hidden = !trip;
+    acctName.placeholder = trip ? 'Trip name, e.g. Lisbon' : 'Account name';
+  });
   acctNumber.addEventListener('input', () => { sectionSel.hidden = kindSel.value !== 'header' || !!acctNumber.value; });
   const addIt = () => {
     try {
+      if (kindSel.value === 'trip') {                       // a vacation is a trip: it takes the next of 7100, 7200... with its five accounts
+        const name = acctName.value.trim();
+        const before = new Set(state.trips.map(t => t.slot));
+        state.trips = addTrip(state.trips, { name, start: tripStart.value, end: tripEnd.value });
+        const slot = state.trips.find(t => !before.has(t.slot)).slot;
+        addingAccount = false;
+        recompute(); render(); markDirty(); renderSettingsScreen();
+        say(`Added ${name} as 7${slot}00, with Travel, Lodging, Food & drinks, Entertainment and Purchases under it.`);
+        return;
+      }
       const out = addAccount(state.customs, state.coding, kindSel.value, acctName.value, acctMatch.value, { number: acctNumber.value, section: sectionSel.value });
       state.customs = out.customs;
       const name = acctName.value.trim();
@@ -1789,7 +1808,7 @@ function renderCodingScreen(body) {
     h('p', { class: 'sub', text: 'Add an account, then drag its ≡ handle onto another account to tuck it underneath. Standard accounts count in hundreds (5100, 5200…), sub accounts in tens (5110, 5120…), and the level below that in twos (5112, 5114…). Rename anything, delete accounts you don’t use (their transactions move into another one; Reset brings them all back), and give an account some words, like NETFLIX, to file matching charges there automatically.' }),
     msg,
     addingAccount
-      ? h('div', { class: 'row-form sub-add' }, acctName, kindSel, sectionSel, acctNumber, acctMatch,
+      ? h('div', { class: 'row-form sub-add' }, acctName, kindSel, sectionSel, acctNumber, acctMatch, tripStart, tripEnd,
           h('button', { type: 'button', class: 'btn', text: 'Add', onclick: addIt }),
           h('button', { type: 'button', class: 'btn ghost', text: 'Cancel', onclick: () => { addingAccount = false; renderSettingsScreen(); } }))
       : h('div', { class: 'row-form sub-add' }, h('button', { type: 'button', class: 'btn', id: 'new-account', text: 'New account', onclick: () => { addingAccount = true; renderSettingsScreen(); document.getElementById('acct-name')?.focus(); } })),
@@ -1818,10 +1837,20 @@ function renderTripsScreen(body) {
   body.append(
     h('p', { class: 'sub', text: `Each trip is an account named after it: the first is 7100, the second 7200, up to ${MAX_TRIPS}. Every trip comes with the same five accounts under it: Travel (7110), Lodging (7120), Food & drinks (7130), Entertainment (7140) and Purchases (7150). The trip shows the total of the five. Vacation charges file under the trip they fall in, from 45 days before to 10 days after. Change any single one from GL Detail.` }),
     state.trips.length
-      ? h('div', {}, state.trips.map(t => h('div', { class: 'trip' },
-          h('span', { class: 'code', text: `7${t.slot}00` }),
-          h('div', {}, h('b', { text: t.name }), h('div', { class: 'sub', text: `${fmtDate(t.start)} to ${fmtDate(t.end)}` })),
-          twoStep('Remove', 'Tap again to remove', guard(msg, () => { state.trips = removeTrip(state.trips, t.slot); recompute(); render(); renderSettingsScreen(); markDirty(); }), 'btn ghost'))))
+      ? h('div', {}, state.trips.map(t => {
+          const change = field => e => {
+            try { state.trips = updateTrip(state.trips, t.slot, { [field]: e.target.value }); recompute(); render(); markDirty(); renderSettingsScreen(); }
+            catch (err) { msg.className = 'msg error'; msg.textContent = err.message; renderSettingsScreen(); const m = $('trip-msg'); m.className = 'msg error'; m.textContent = err.message; }
+          };
+          return h('div', { class: 'trip trip-edit' },
+            h('span', { class: 'code', text: `7${t.slot}00` }),
+            h('div', { class: 'trip-fields' },
+              h('input', { id: `trip-name-${t.slot}`, type: 'text', maxlength: '60', value: t.name, 'aria-label': `Name of trip ${t.slot}`, onchange: change('name') }),
+              h('div', { class: 'row-form' },
+                h('input', { id: `trip-start-${t.slot}`, type: 'date', value: t.start, 'aria-label': `Start of ${t.name}`, onchange: change('start') }),
+                h('input', { id: `trip-end-${t.slot}`, type: 'date', value: t.end, 'aria-label': `End of ${t.name}`, onchange: change('end') }))),
+            twoStep('Remove', 'Tap again to remove', guard(msg, () => { state.trips = removeTrip(state.trips, t.slot); recompute(); render(); renderSettingsScreen(); markDirty(); }), 'btn ghost'));
+        }))
       : h('p', { class: 'note', text: 'No trips yet. Vacation charges sit under "No trip yet" (7000) until you add one.' }),
     h('div', { class: 'row-form', style: 'margin-top:10px' },
       h('input', { id: 'trip-name', type: 'text', placeholder: 'Trip name', 'aria-label': 'Trip name' }),

@@ -27,6 +27,15 @@ export function addTrip(trips, trip) {
   return [...trips, { slot, name: trip.name.trim(), start: trip.start, end: trip.end }].sort((a, b) => a.slot - b.slot);
 }
 
+// Changes a trip's name or dates. Its accounts follow: the name shows on 7100, and the dates decide which charges belong to it.
+export function updateTrip(trips, slot, changes) {
+  const cur = trips.find(t => t.slot === slot);
+  if (!cur) throw new Error('That trip doesn’t exist.');
+  const next = { name: String(changes.name ?? cur.name).trim(), start: changes.start ?? cur.start, end: changes.end ?? cur.end };
+  validateTrip(next);
+  return trips.map(t => (t.slot === slot ? { slot, ...next } : t));
+}
+
 export const removeTrip = (trips, slot) => trips.filter(t => t.slot !== slot);
 
 // Which trip does a date belong to? A trip whose dates contain it wins; otherwise the nearest start inside the window.

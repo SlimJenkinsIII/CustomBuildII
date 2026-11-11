@@ -149,14 +149,41 @@ server.listen(0, async () => {
   await gear('Trips');
   await page.fill('#trip-name', 'Lisbon'); await page.fill('#trip-start', '2026-03-05'); await page.fill('#trip-end', '2026-03-12');
   await page.click('text=Add trip');
-  check('trip added in block 7100', (await page.textContent('#settings-body')).includes('7100') && (await page.textContent('#settings-body')).includes('Lisbon'));
+  check('trip added in block 7100', (await page.textContent('#settings-body')).includes('7100') && (await page.inputValue('#trip-name-1')) === 'Lisbon');
+  // a trip can be renamed and re-dated afterwards
+  await page.fill('#trip-name-1', 'Lisbon in March'); await page.press('#trip-name-1', 'Tab');
+  check('a trip can be renamed on the Trips screen', (await page.inputValue('#trip-name-1')) === 'Lisbon in March');
+  await page.fill('#trip-name-1', 'Lisbon'); await page.press('#trip-name-1', 'Tab');
+  await page.fill('#trip-end-1', '2026-03-01'); await page.press('#trip-end-1', 'Tab');
+  check('a trip cannot be given an end date before it starts', /cannot end before/.test(await page.textContent('#trip-msg')));
+  await closeSheet();
+  await gear('TB coding');
+  await page.fill('#name-vac1', 'Lisbon trip'); await page.press('#name-vac1', 'Tab');
+  check('the trip account in TB coding renames the trip', (await page.inputValue('#name-vac1')) === 'Lisbon trip');
+  await page.fill('#name-vac1', 'Lisbon'); await page.press('#name-vac1', 'Tab');
+  // typing a vacation number as a plain account explains itself, and New account can add the vacation instead
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Extra'); await page.selectOption('#acct-kind', 'header'); await page.fill('#acct-number', '7200');
+  await page.click('#settings-body .sub-add button:text-is("Add")');
+  check('a vacation number says it is kept for trips', /kept for a vacation trip/.test(await page.textContent('#settings-body')));
+  await page.selectOption('#acct-kind', 'trip');
+  check('choosing Vacation swaps the form to trip fields', await page.locator('#acct-start').isVisible() && await page.locator('#acct-end').isVisible() && await page.locator('#acct-number').isHidden());
+  await page.fill('#acct-name', 'Tahoe'); await page.fill('#acct-start', '2026-11-20'); await page.fill('#acct-end', '2026-11-27');
+  await page.click('#settings-body .sub-add button:text-is("Add")');
+  check('New account can add a vacation: it takes 7200 with its five accounts', /Added Tahoe as 7200/.test(await page.textContent('#settings-body')) && (await page.locator('input[id^="code-vac2"]').count()) === 6);
+  // take Tahoe out again so later checks run on the same single trip
+  await closeSheet();
+  await gear('Trips');
+  await page.locator('#settings-body .trip:has(input[value="Tahoe"]) button', { hasText: 'Remove' }).click();
+  await page.locator('#settings-body .trip:has(input[value="Tahoe"]) button', { hasText: 'Tap again' }).click();
+  await page.waitForFunction(() => !document.querySelector('#settings-body input[value="Tahoe"]'));
   await closeSheet();
 
   // ---------- the trip's five accounts show under it in TB coding ----------
   await gear('TB coding');
   const tripCodes = await page.locator('#settings-body input[id^="code-vac1"]').evaluateAll(els => els.map(e => e.value));
   check('the trip is 7100 with its five accounts in tens under it: Travel, Lodging, Food, Entertainment, Purchases', tripCodes.join() === '7100,7110,7120,7130,7140,7150', tripCodes.join());
-  check('the trip account itself is 7100 and takes the trip\'s name', (await page.locator('#settings-body .code-row:has(input[id="code-vac1"]) >> text=Lisbon').count()) >= 0 && (await page.textContent('#settings-body')).includes('Lisbon'));
+  check('the trip account itself is 7100 and takes the trip\'s name', (await page.inputValue('[id="code-vac1"]')) === '7100' && (await page.inputValue('[id="name-vac1"]')) === 'Lisbon');
   check('the trip\'s accounts sit indented under it', (await page.locator('#settings-body .code-row.nested:has(input[id="code-vac1_travel"])').count()) === 1);
   await closeSheet();
 

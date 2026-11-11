@@ -434,3 +434,13 @@ test('the category choices are in number order, with the accounts you add where 
     assert.equal(list[list.length - 1].class, 'Not an account');       // transfers go last
   } finally { resetStructure(); }
 });
+
+test('a number kept for a vacation says so, instead of naming a trip you can\'t see', () => {
+  assert.throws(() => addAccount([], {}, 'header', 'Extra', '', { number: '7200' }), /kept for a vacation trip.*Trips/);
+  assert.throws(() => setCode({}, 'free_groceries', '7200'), /kept for a vacation trip/);
+  assert.throws(() => addAccount([], {}, 'header', 'Extra', '', { number: '5100' }), /already used by Rent/);   // ordinary clashes read as before
+  assert.equal(codingList([], {}).find(r => r.key === 'vac1'), undefined);                                      // a trip not added yet is not listed
+  const row = codingList([{ slot: 1, name: 'Lisbon' }], {}).find(r => r.key === 'vac1');
+  assert.equal(row.renamable, true);                                                                            // but once added, its name can be changed
+  assert.equal(codingList([{ slot: 1, name: 'Lisbon' }], {}).find(r => r.key === 'vac0').renamable, false);    // "no trip yet" is not a trip
+});

@@ -391,7 +391,7 @@ export function addAccount(customs, coding, kind, name, match = '', { number = '
   if (number) {
     if (!/^\d{4}$/.test(number)) throw new Error('Use a 4-digit number.');
     const clash = accountsWith(coding).find(a => a.code === number);
-    if (clash) throw new Error(`${number} is already used by ${clash.name}.`);
+    if (clash) throw new Error(clashReason(number, clash));
     if (kind !== 'header' && number[0] !== GROUP_CLASS[kind]) throw new Error(`That kind of account lives in the ${GROUP_CLASS[kind]}000s.`);
     code = number;
   } else {
@@ -486,6 +486,11 @@ export function moveAccount({ coding = {}, parents = {}, customs = [] }, key, ta
   return { coding: nextCoding, parents: nextParents, customs: nextCustoms };
 }
 
+// The reason a number can't be used. Vacation numbers (7100, 7200...) are kept for trips, even ones not added yet.
+const clashReason = (code, clash) => (CATEGORIES[clash.key]?.slot !== undefined
+  ? `${code} is kept for a vacation trip. Add trips from Settings → Trips (or New account → Vacation), and they take 7100, 7200 and so on in order.`
+  : `${code} is already used by ${clash.name}.`);
+
 // Keeps only entries that name a real account and hold a 4-digit number.
 export function cleanCoding(raw) {
   const out = {};
@@ -504,7 +509,7 @@ export function setCode(coding, key, code) {
   const next = { ...coding };
   if (code === defaultCode(key)) delete next[key]; else next[key] = code;
   const clash = accountsWith(next).find(a => a.code === code && a.key !== key);
-  if (clash) throw new Error(`${code} is already used by ${clash.name}.`);
+  if (clash) throw new Error(clashReason(code, clash));
   return next;
 }
 
@@ -519,7 +524,7 @@ export function codingList(trips = [], coding = {}, names = {}) {
   const live = liveFor(trips);
   const rows = [
     ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && live(x))
-      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
+      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id) || (!!x.fixed && x.slot > 0), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
     ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true, movable: true, droppable: false, depth: depthOf(`src:${k}`), hasKids: false })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, code: a.code, name: a.name, status: 'Active', editable: false })),

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CATEGORIES, MAX_TRIPS, VAC_KINDS, applyTripNames, selectableCategories, chartOfAccounts, codeLabel, migrateCategory, parentOf, depthOf } from '../app/src/categories.js';
-import { addTrip, removeTrip, nextSlot, tripFor, assignTrips, validateTrip } from '../app/src/trips.js';
+import { addTrip, updateTrip, removeTrip, nextSlot, tripFor, assignTrips, validateTrip } from '../app/src/trips.js';
 import { categorize } from '../app/src/rules.js';
 import { plannedFreeCash, monthSummary } from '../app/src/budget.js';
 import { freeSpend } from '../app/src/budget.js';
@@ -104,4 +104,19 @@ test('the vacation set-aside comes out of free cash but trips never count as wee
   assert.equal(freeSpend(rows[0]), 0);
   assert.equal(monthSummary(rows, plan, '2026-03').vacation.actual, 41230);
   assert.equal(monthSummary(rows, plan, '2026-03').vacation.planned, 20000);
+});
+
+test('a trip can be renamed and its dates changed, with the same checks as adding one', () => {
+  let trips = addTrip([], trip('Lisbon', '2026-05-01', '2026-05-09'));
+  trips = updateTrip(trips, 1, { name: '  Lisbon in May  ' });
+  assert.equal(trips[0].name, 'Lisbon in May');
+  assert.equal(trips[0].start, '2026-05-01');                              // dates untouched by a rename
+  trips = updateTrip(trips, 1, { start: '2026-05-03', end: '2026-05-12' });
+  assert.deepEqual([trips[0].start, trips[0].end], ['2026-05-03', '2026-05-12']);
+  assert.throws(() => updateTrip(trips, 1, { name: '   ' }), /name/i);
+  assert.throws(() => updateTrip(trips, 1, { end: '2026-04-01' }), /cannot end before/);
+  assert.throws(() => updateTrip(trips, 7, { name: 'x' }), /doesn’t exist/);
+  applyTripNames(trips);
+  assert.equal(CATEGORIES.vac1.name, 'Lisbon in May');                      // the 7100 account shows the new name
+  applyTripNames([]);
 });

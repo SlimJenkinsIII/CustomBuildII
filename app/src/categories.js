@@ -15,7 +15,8 @@
 //   free          -> flexible spending; free cash = take-home - fixed - subscriptions - set-asides - savings (5400s)
 //   savings       -> money moved into savings / investing. These are ASSET accounts (1000s), not spending.
 //   other         -> interest, gains and losses (6000-6090). Kept out of the budget math.
-// System: 'transfer' (card payments etc., ignored) and 'review' (not classified yet; a suspense account, 1900).
+// System: 'transfer' (card payments etc., ignored) and 'review' (not classified yet). Needs review is an EXPENSE account (5900):
+// money out is expense, money in is contra-expense, so an unsorted item moves net income until you classify it.
 // Unclassified money-out counts against free cash until you classify it, so a miss errs on the strict side.
 
 export const GROUPS = {
@@ -100,7 +101,7 @@ export const CATEGORIES = Object.fromEntries([
   ...vacationEntries,
 
   c('transfer', 'system', null, 'Transfer (not spending)'),
-  c('review', 'system', '1900', 'Needs review'),
+  c('review', 'system', '5900', 'Needs review'),   // an expense account: money out is expense, money in reduces it (contra-expense)
 ]);
 
 // The accounts statements come from. Each statement file belongs to one of these.
@@ -143,7 +144,7 @@ export const sourceLabel = account => {
 export function chartOfAccounts(trips = []) {
   const live = liveFor(trips);
   const fromCategories = Object.values(CATEGORIES).filter(x => x.code && !(x.id in REMOVED) && live(x))
-    .map(x => ({ code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: 'Active' }));
+    .map(x => ({ code: x.code, name: x.name, status: 'Active' }));
   const fromSources = Object.values(SOURCE_ACCOUNTS).map(x => ({ ...x, status: 'Active' }));
   const planned = PLANNED.map(x => ({ ...x, status: 'Planned' }));
   return [...fromCategories, ...fromSources, ...planned]
@@ -164,7 +165,7 @@ export function selectableCategories(trips = []) {
   const unassignedOk = x => !(trips.length && x.slot === 0);
   // In number order, so your own accounts sit where their number puts them, not at the end. Anything that isn't an account comes last.
   return Object.values(CATEGORIES)
-    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && live(x) && unassignedOk(x))
+    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && x.id !== 'review' && live(x) && unassignedOk(x))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account', code: x.code ?? '9999', depth: x.code ? depthOf(x.id) : 0 }))
     .sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
 }
@@ -527,7 +528,7 @@ export function codingList(trips = [], coding = {}, names = {}) {
   const live = liveFor(trips);
   const rows = [
     ...Object.values(CATEGORIES).filter(x => DEFAULT_CODES[x.id] && !(x.id in REMOVED) && live(x))
-      .map(x => ({ key: x.id, code: x.code, name: x.id === 'review' ? 'Suspense (needs review)' : x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id) || (!!x.fixed && x.slot > 0), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
+      .map(x => ({ key: x.id, code: x.code, name: x.name, status: x.custom ? 'Sub account' : 'Active', editable: true, renamable: canRename(x.id) || (!!x.fixed && x.slot > 0), droppable: canParent(x.id) && depthOf(x.id) < 2, movable: canParent(x.id), depth: depthOf(x.id), hasKids: Object.values(CATEGORIES).some(y => y.id !== x.id && !(y.id in REMOVED) && parentOf(y.id) === x.id), custom: !!x.custom, canRemove: !x.custom && canRemove(x.id), header: x.group === 'header' })),
     ...Object.entries(SOURCE_ACCOUNTS).map(([k, v]) => ({ key: `src:${k}`, code: v.code, name: v.name, status: 'Active', editable: true, renamable: true, movable: true, droppable: false, depth: depthOf(`src:${k}`), hasKids: false })),
     ...PLANNED.map(p => ({ key: `planned:${p.code}`, code: p.code, name: p.name, status: 'Planned', editable: false })),
     ...SYSTEM_ACCOUNTS.map(a => ({ key: `system:${a.key}`, code: a.code, name: a.name, status: 'Active', editable: false })),

@@ -88,10 +88,9 @@ test('trial balance net income agrees with the income-statement view, month by m
   const tb = trialBalance(txs, '2026');
   const m = monthlyMatrix(txs, '2026');
   const net = m.lines.find(l => l.kind === 'net' && l.label === 'Net income (loss)');
-  const review = m.lines.find(l => l.id === 'review');
   for (const ym of m.months.filter(ym => m.hasData[ym])) {
-    // the income statement counts unclassified spending; the trial balance parks it in suspense
-    assert.equal(tb.netIncome.byMonth[ym], net.byMonth[ym] + review.byMonth[ym], ym);
+    // Needs review is an expense account, so unsorted items count in net income in both views
+    assert.equal(tb.netIncome.byMonth[ym], net.byMonth[ym], ym);
   }
 });
 

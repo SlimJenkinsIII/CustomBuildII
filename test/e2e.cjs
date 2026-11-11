@@ -417,7 +417,7 @@ server.listen(0, async () => {
   } else check('the sample data has two charges from one unknown merchant to learn from', false, String(magCount));
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const mag = glRow('MAGNOLIA CAFE');
-  check('unknown merchant starts in review', (await mag.innerText()).includes('1900'));
+  check('unknown merchant starts in review, an expense account (5900)', (await mag.innerText()).includes('5900'));
   await mag.locator('.linkbtn').click();
   await mag.locator('select').selectOption('free_restaurants');
   check('category choice applied', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));

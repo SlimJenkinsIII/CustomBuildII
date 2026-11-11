@@ -30,7 +30,7 @@ test('accounts are sorted by what they are: things you have, things you owe, equ
   assert.equal(sectionOf('src:amex'), 'liability');
   assert.equal(sectionOf('src:chase-card'), 'liability');
   assert.equal(sectionOf('save_chase'), 'asset');          // savings are assets, not spending
-  assert.equal(sectionOf('review'), 'asset');              // the suspense account
+  assert.equal(sectionOf('review'), 'pnl');                // Needs review is an expense account
   assert.equal(sectionOf('clearing'), 'asset');
   assert.equal(sectionOf('equity'), 'equity');
   assert.equal(sectionOf('retained'), 'equity');
@@ -123,4 +123,36 @@ test('on the sample statements, with no opening balances, it still balances', ()
   const bs = balanceSheet(categorize(matchTransfers(rows)), '2026');
   for (const ym of bs.months.filter(m => bs.reached[m])) assert.equal(bs.difference.byMonth[ym], 0, ym);
   assert.ok(bs.liabilities.rows.length >= 2);                            // the two cards
+});
+
+test('Needs review is an expense account: money out is expense, money in is contra-expense, and it flows to net income and equity', () => {
+  // two items nothing recognises: $50 out and $20 in
+  const rows = run([
+    tx('chase-checking', '2025-01-06', 300000, 'ACME CORP PAYROLL'),
+    tx('chase-checking', '2025-01-10', -5000, 'MYSTERY MERCHANT ONE'),
+    tx('chase-checking', '2025-01-11', 2000, 'MYSTERY REFUND TWO'),
+  ]);
+  assert.deepEqual(rows.filter(r => r.category === 'review').map(r => r.cents).sort((a, b) => a - b), [-5000, 2000]);
+  const tb = trialBalance(rows, '2025', '', OPEN);
+  const rev = tb.rows.find(r => r.key === 'review');
+  assert.equal(rev.code, '5900');
+  assert.equal(rev.section, 'pnl');                                    // a profit-and-loss account, not a balance-sheet suspense
+  assert.equal(rev.byMonth['2025-01'], 5000 - 2000);                  // $50 debit less $20 credit: a net $30 of expense
+  // the books still balance, and the unsorted net is part of net income
+  assert.equal(tb.totals.difference['2025-01'], 0);
+  assert.equal(tb.netIncome.byMonth['2025-01'], 300000 - 3000);
+  // the balance sheet has no suspense asset any more; the $30 sits in earnings
+  const bs = balanceSheet(rows, '2025', '', OPEN);
+  assert.ok(!bs.assets.rows.some(r => /suspense|needs review/i.test(r.name)));
+  assert.equal(bs.equity.earnings.byMonth['2025-01'], 300000 - 3000);
+  assert.equal(bs.difference.byMonth['2025-01'], 0);
+});
+
+test('when an unsorted item is coded, net income moves by exactly the difference between the two accounts', () => {
+  const unsorted = run([tx('chase-checking', '2025-01-10', -5000, 'MYSTERY MERCHANT ONE')]);
+  const sorted = unsorted.map(r => ({ ...r, category: 'free_groceries' }));
+  const a = trialBalance(unsorted, '2025', '', OPEN), b = trialBalance(sorted, '2025', '', OPEN);
+  assert.equal(a.netIncome.byMonth['2025-01'], b.netIncome.byMonth['2025-01']);   // $50 of expense either way: sorting it only moves it between lines
+  assert.equal(a.rows.find(r => r.key === 'review').byMonth['2025-01'], 5000);
+  assert.equal(b.rows.find(r => r.key === 'review'), undefined);
 });

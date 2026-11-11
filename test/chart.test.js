@@ -24,8 +24,8 @@ test('codes sit in the right range for what the account is', () => {
     if (c.group === 'savings') assert.equal(c.code[0], '1', c.id);   // savings are assets, not spending
     if (c.group === 'other') assert.equal(c.code[0], '6', c.id);
   }
-  assert.equal(first('review'), '1');                                 // suspense
-  assert.equal(CATEGORIES.review.code, '1900');
+  assert.equal(first('review'), '5');                                 // Needs review is an expense account
+  assert.equal(CATEGORIES.review.code, '5900');                          // an expense account, not a suspense asset
   assert.equal(CATEGORIES.transfer.code, null);                       // ignored, so no account
   for (const a of Object.values(SOURCE_ACCOUNTS)) assert.ok(['1', '2'].includes(a.code[0]));
   assert.equal(SOURCE_ACCOUNTS['chase-card'].code[0], '2');           // cards are liabilities

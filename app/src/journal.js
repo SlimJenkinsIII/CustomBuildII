@@ -21,7 +21,7 @@ export function accountInfo(key) {
   const sys = SYSTEM_ACCOUNTS.find(a => a.key === key);
   if (sys) return { key, code: sys.code, name: sys.name };
   const c = CATEGORIES[key];
-  return { key, code: c.code, name: key === SUSPENSE ? 'Suspense (needs review)' : c.name, group: c.group };
+  return { key, code: c.code, name: c.name, group: c.group };
 }
 
 const neg = x => (x === 0 ? 0 : -x);                                   // never -0
@@ -105,14 +105,15 @@ export const countBeforeOpening = (txs, opening) => txs.filter(t => t.date <= op
 
 // Only income, spending and other income/loss reset each year; everything else carries forward.
 const PNL_GROUPS = new Set(['income', 'fixed', 'subscriptions', 'onetime', 'free', 'vacation', 'other']);
-const isPnl = key => !key.startsWith('src:') && PNL_GROUPS.has(CATEGORIES[key]?.group);
+// Needs review is an expense account: what is still unsorted counts in net income (money out as expense, money in as contra-expense).
+const isPnl = key => !key.startsWith('src:') && (PNL_GROUPS.has(CATEGORIES[key]?.group) || key === SUSPENSE);
 
 // Which part of the statements an account belongs to. Decided by what the account is, never by its number.
 export function sectionOf(key) {
   if (key.startsWith('src:')) return SOURCE_ROLES[key.slice(4)] === 'liability' ? 'liability' : 'asset';
   if (key === 'equity' || key === 'retained') return 'equity';
   if (key === 'clearing') return 'asset';
-  return isPnl(key) ? 'pnl' : 'asset';           // savings accounts and the suspense account are things you have
+  return isPnl(key) ? 'pnl' : 'asset';           // savings accounts are things you have
 }
 
 // ---------- trial balance ----------

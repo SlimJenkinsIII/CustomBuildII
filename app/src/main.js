@@ -9,7 +9,7 @@ import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { parentAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -76,6 +76,9 @@ function recompute() {
   applyRemoved(state.removed);
   state.parents = cleanParents(state.parents);
   applyParents(state.parents);
+  // an account dragged under a heading by an older version had turned into a heading itself: put it back as an account
+  const repaired = repairHeaders(state.customs, state.parents);
+  if (repaired !== state.customs) { state.customs = repaired; applyCustoms(state.customs); state.parents = cleanParents(state.parents); applyParents(state.parents); markDirty(); }
   applyCoding(state.coding);
   applyTripNames(state.trips);
   const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(state.raw, state.venmoDetail)), { userRules: customRules(state.customs) }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
@@ -1084,6 +1087,8 @@ const isOpen = key => state.open.has(key);
 const saveOpen = () => { try { localStorage.setItem('my-budget-open', JSON.stringify([...state.open])); } catch { /* it just starts folded next time */ } };
 const refreshFS = focusId => { if (state.txs.length && !state.locked) renderFS(asOfDate(state.txs), focusId); };
 const toggleOpen = key => { if (state.open.has(key)) state.open.delete(key); else state.open.add(key); saveOpen(); refreshFS(`tw-${key}`); };
+// What to draw: every main account is noted (so Expand all can open them all, however deep), and whatever is folded away is dropped.
+const unfolded = entries => entries.filter(e => { if (e.kind === 'parent') parentKeysSeen.add(e.key); return !isHidden(e, isOpen); });
 const setAllOpen = on => { state.open = on ? new Set(parentKeysSeen) : new Set(); saveOpen(); refreshFS(); };
 const expandControls = () => h('span', { class: 'fs-expand' },
   h('button', { type: 'button', class: 'linkbtn expand-all', text: 'Expand all', onclick: () => setAllOpen(true) }),
@@ -1135,13 +1140,13 @@ function renderTrialBalance(asOf) {
   const span = bal ? 14 : 13;
   const rollupTb = list => ({ openBal: list.reduce((t, r) => t + r.openBal, 0), change: list.reduce((t, r) => t + r.change, 0), total: list.reduce((t, r) => t + r.total, 0),
     byMonth: addMaps([zeroMonths(tb.months), ...list.map(r => r.byMonth)]), balByMonth: addMaps([zeroMonths(tb.months), ...list.map(r => r.balByMonth)]) });
-  const mains = parentAccounts(state.trips);
+  // main accounts always; and in the balances view every bank, card, savings and investment account too, even before anything is uploaded
+  const mains = bal ? ghostAccounts(state.trips) : parentAccounts(state.trips);
   const ownTb = r => r.openBal !== 0 || tb.months.some(ym => r.byMonth[ym] !== 0 || r.balByMonth[ym] !== 0);
   const classes = [...new Set([...shown.map(r => r.class), ...mains.map(m => m.class)])].sort((a, b) => CLASS_ORDER.indexOf(a) - CLASS_ORDER.indexOf(b));
   for (const cls of classes) {
     body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: cls }), h('td', { colspan: span })));
-    for (const e of nestRows(shown.filter(r => r.class === cls), { rollup: rollupTb, hasOwn: ownTb, ghosts: mains.filter(m => m.class === cls) })) {
-      if (isHidden(e, isOpen)) continue;
+    for (const e of unfolded(nestRows(shown.filter(r => r.class === cls), { rollup: rollupTb, hasOwn: ownTb, ghosts: mains.filter(m => m.class === cls) }))) {
       const d = e.data, tr = entryRow(e);
       if (bal) tr.append(h('td', { text: whole(d.openBal) }));
       tb.months.forEach((ym, i) => {
@@ -1257,8 +1262,7 @@ function renderBalanceSheet(asOf) {
     const rollup = list => ({ open: list.reduce((t, r) => t + r.open, 0), was: list.reduce((t, r) => t + r.was, 0), byMonth: addMaps([zeroMonths(bs.months), ...list.map(r => r.byMonth)]) });
     const hasOwn = r => r.open !== 0 || bs.months.some(ym => r.byMonth[ym] !== 0);
     const cls = { assets: 'Assets', liabilities: 'Liabilities', equity: 'Equity' }[group];
-    for (const e of nestRows(withWas, { rollup, hasOwn, ghosts: parentAccounts(state.trips).filter(m => m.class === cls) })) {
-      if (isHidden(e, isOpen)) continue;
+    for (const e of unfolded(nestRows(withWas, { rollup, hasOwn, ghosts: ghostAccounts(state.trips).filter(m => m.class === cls) }))) {
       const tr = entryRow(e);
       numbers(tr, e.data, e.data.was, e.kind !== 'parent');
       body.append(tr);
@@ -1273,7 +1277,7 @@ function renderBalanceSheet(asOf) {
   header('Assets');
   sectionRows('assets', bs.assets.rows);
   totalRow('Total assets', 'assets', bs.assets, 'tot');
-  if (bs.liabilities.rows.length || parentAccounts(state.trips).some(m => m.class === 'Liabilities')) {
+  if (bs.liabilities.rows.length || ghostAccounts(state.trips).some(m => m.class === 'Liabilities')) {
     header('Liabilities');
     sectionRows('liabilities', bs.liabilities.rows);
     totalRow('Total liabilities', 'liabilities', bs.liabilities, 'tot');
@@ -1474,7 +1478,7 @@ function renderMatrix(asOf) {
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
       const rows = [];
       while (m.lines[i + 1]?.kind === 'row') rows.push({ ...m.lines[++i], key: m.lines[i].id });
-      for (const e of nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 })) { if (!isHidden(e, isOpen)) lineRow(e.data, e); }
+      for (const e of unfolded(nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 }))) lineRow(e.data, e);
       continue;
     }
     if (mo && l.kind === 'running') continue;

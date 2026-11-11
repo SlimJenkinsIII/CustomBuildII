@@ -243,6 +243,14 @@ server.listen(0, async () => {
   await drag(`#settings-body .grip[aria-label^="Drag 1100"]`, '#settings-body .code-row[data-drop="save_invest"]');
   await page.waitForTimeout(200);
   check('an asset dragged under Investment account gets the next free two', (await page.locator('#settings-body input[aria-label^="TB number for Roth IRA"]').inputValue()) === '1412');
+  // a savings account dragged under the Savings heading stays an account: it still holds a balance and shows on the statements
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Chase Savings 8527'); await page.selectOption('#acct-kind', 'savings');
+  await page.click('#settings-body .sub-add button:text-is("Add")');
+  await page.waitForFunction(() => /Added \d{4} Chase Savings 8527/.test(document.getElementById('settings-body').textContent));
+  const sv = (await page.textContent('#settings-body')).match(/Added (\d{4}) Chase Savings 8527/)[1];
+  await drag(`#settings-body .grip[aria-label^="Drag ${sv}"]`, '#settings-body .code-row:has(input.name[value="Savings"])');
+  check('a savings account dragged under the Savings heading takes the next number under it', /^12\d\d$/.test(await page.locator('#settings-body .code-row:has(input.name[value="Chase Savings 8527"]) input[id^="code-"]').inputValue()));
   await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="1"]');
   check('dropping an account in the wrong section is refused', /own section/.test(await page.textContent('#settings-body')) && (await page.inputValue(`#code-${netflixKey}`)) === '5230');
   await drag(`#settings-body .grip[aria-label^="Drag 5230"]`, '#settings-body h3[data-cls="5"]');
@@ -272,10 +280,14 @@ server.listen(0, async () => {
   check('the choice is remembered on this device', (await page.evaluate(() => localStorage.getItem('my-budget-open'))).includes(firstKey));
   await page.locator('[id="tw-' + firstKey + '"]').first().click();
   check('clicking it again folds it away', (await page.locator('#fs-tb td.acct.sub-acct').count()) === 0);
+  const bsAll = await page.locator('#fs-bs').textContent();
+  check('accounts with nothing uploaded yet are listed too: main accounts folded, the rest under them once opened', /Investments/.test(bsAll));
   await goFS('bs');
   check('the Balance Sheet shows the same main accounts, folded', /Investments/.test(await page.locator('#fs-bs').textContent()) && (await page.locator('#fs-bs td.acct.sub-acct').count()) === 0);
   await page.click('#fs-bs .expand-all');
   check('Expand all opens every main account, on every page', (await page.locator('#fs-bs td.acct.sub-acct').count()) >= 1);
+  const bsOpen = await page.locator('#fs-bs').textContent();
+  check('every bank, card, Venmo and savings account is listed, even with nothing in it', ['Venmo balance', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account', 'Crypto', 'Chase Savings 8527', 'Roth IRA'].every(n => bsOpen.includes(n)), ['Venmo balance', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account', 'Crypto', 'Chase Savings 8527', 'Roth IRA'].filter(n => !bsOpen.includes(n)).join(', ') + ' missing');
   await goFS('tb');
   check('and the other pages follow', (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 1);
   await goFS('is');

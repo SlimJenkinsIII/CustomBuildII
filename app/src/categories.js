@@ -317,7 +317,7 @@ export function cleanCustoms(raw) {
     const name = typeof x.name === 'string' ? x.name.trim().slice(0, 60) : '';
     if (!groupOk(group) || !name) continue;
     ids.add(x.id); codes.add(String(x.code));
-    out.push({ id: x.id, ...(parent && { parent }), group, code: String(x.code), name, match: cleanMatch(x.match) });
+    out.push({ id: x.id, ...(parent && { parent }), group, ...(x.header === true && group === 'header' && { header: true }), code: String(x.code), name, match: cleanMatch(x.match) });
   }
   return out;
 }
@@ -345,6 +345,19 @@ export function parentAccounts(trips = []) {
   return [...kids].filter(k => CATEGORIES[k] && !(k in REMOVED) && live(CATEGORIES[k]) && k !== 'vac0')
     .map(k => ({ key: k, code: CATEGORIES[k].code, name: CATEGORIES[k].name, class: classOf(CATEGORIES[k].code) }))
     .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+// Everything that belongs on a balance sheet, so statements can list it even before anything has been uploaded: every main account,
+// every bank, card and Venmo account, and every savings or investment account you have. `leaf` marks one with nothing under it.
+export function ghostAccounts(trips = []) {
+  const parents = parentAccounts(trips);
+  const isParent = new Set(parents.map(p => p.key));
+  const live = liveFor(trips);
+  const found = new Map(parents.map(p => [p.key, { ...p, leaf: false }]));
+  const add = (key, code, name) => { if (!found.has(key) && code) found.set(key, { key, code, name, class: classOf(code), leaf: !isParent.has(key) }); };
+  for (const [k, v] of Object.entries(SOURCE_ACCOUNTS)) add(`src:${k}`, v.code, v.name);
+  for (const x of Object.values(CATEGORIES)) if (x.group === 'savings' && !(x.id in REMOVED) && live(x)) add(x.id, x.code, x.name);
+  return [...found.values()].sort((a, b) => a.code.localeCompare(b.code));
 }
 
 export const isHeader = id => CATEGORIES[id]?.group === 'header';
@@ -417,7 +430,7 @@ export function addAccount(customs, coding, kind, name, match = '', { number = '
     code = nextHundred(cls, used);
   }
   const id = `sub_${(Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-10)}`;
-  return { customs: [...customs, { id, group: kind, code, name, match: kind === 'header' ? [] : cleanMatch(match) }], id, code };
+  return { customs: [...customs, { id, group: kind, ...(kind === 'header' && { header: true }), code, name, match: kind === 'header' ? [] : cleanMatch(match) }], id, code };
 }
 
 // Adds an account straight under another one. (The screen adds top-level accounts and you drag them; this is the same rule in code.)
@@ -453,6 +466,24 @@ export function organizeAssets({ coding = {}, parents = {}, customs = [] }) {
     nextParents[k] = ids[h];
   }
   return { coding: nextCoding, parents: nextParents, customs: nextCustoms };
+}
+
+// Older versions turned an account into a parent heading when it was dragged under one. A heading holds no money, so those accounts
+// vanished from the statements and the pickers. This puts them right: a heading is a custom parent that has something under it
+// (or that was made as one); any other "header" is really an account, and gets the kind its number says it is.
+const KIND_BY_CLASS = { 1: 'savings', 4: 'income', 5: 'free', 6: 'other' };
+export function repairHeaders(customs, parents = {}) {
+  let changed = false;
+  const kidsOf = id => customs.some(c => c.parent === id) || Object.values(parents).includes(id);
+  const next = customs.map(x => {
+    if (x.group !== 'header' || x.header === true) return x;
+    if (kidsOf(x.id)) { changed = true; return { ...x, header: true }; }
+    const group = KIND_BY_CLASS[x.code[0]];
+    if (!group) return x;
+    changed = true;
+    return { ...x, group };
+  });
+  return changed ? next : customs;
 }
 
 // Removes an account you added. Anything that sat under it moves up to where it was.
@@ -493,7 +524,9 @@ export function moveAccount({ coding = {}, parents = {}, customs = [] }, key, ta
   const nextParents = { ...parents };
   let nextCustoms = customs;
   if (CATEGORIES[key]?.custom) {
-    const newGroup = newParent ? CATEGORIES[newParent].group : CATEGORIES[key].group;
+    // under an account that holds money it takes that account's kind (it files and reports like it); under a parent that holds
+    // none (a heading like Savings), it keeps its own kind, so a savings account stays a savings account
+    const newGroup = newParent && CATEGORIES[newParent].group !== 'header' ? CATEGORIES[newParent].group : CATEGORIES[key].group;
     const inTree = new Set(tree);
     nextCustoms = customs.map(x => {
       if (x.id === key) { const { parent, ...rest } = x; return { ...rest, ...(newParent && { parent: newParent }), group: newGroup }; }

@@ -29,7 +29,12 @@ export function nestRows(rows, { rollup, hasOwn, ghosts = [] }) {
   const parent = (key, code, name, list) => { seen.add(key); out.push({ kind: 'parent', key, code, name, data: rollup(list), ancestors: ancestorsOf(key) }); };
   for (const r of all) {
     for (const hk of headersAbove(r.key)) if (!seen.has(hk)) parent(hk, CATEGORIES[hk].code, CATEGORIES[hk].name, below(hk));
-    if (r.ghost) { if (!seen.has(r.key)) parent(r.key, r.code, r.name, below(r.key)); continue; }
+    if (r.ghost) {
+      if (seen.has(r.key)) continue;
+      if (r.leaf && !below(r.key).length) { seen.add(r.key); out.push({ kind: 'row', key: r.key, code: r.code, name: r.name, data: { ...rollup([]), key: r.key, code: r.code, name: r.name }, ancestors: ancestorsOf(r.key) }); }
+      else parent(r.key, r.code, r.name, below(r.key));
+      continue;
+    }
     const kids = below(r.key);
     if (kids.length) {
       parent(r.key, r.code, r.name, [r, ...kids]);

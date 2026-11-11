@@ -129,3 +129,85 @@ test('trips are main accounts once added, and "no trip yet" is not forced', () =
   assert.ok(withTrip.some(m => m.key === 'vac1' && m.name === 'Lisbon' && m.code === '7100'));
   assert.ok(!withTrip.some(m => m.key === 'vac0'));
 });
+
+import { ghostAccounts } from '../app/src/categories.js';
+
+test('every bank, card, Venmo and savings account is listed for the balance sheet, even with nothing in it', () => {
+  const names = ghostAccounts([]).map(g => g.name);
+  for (const n of ['Chase checking', 'Venmo balance', 'Chase credit card', 'Amex card', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account']) assert.ok(names.includes(n), n);
+  const codes = ghostAccounts([]).map(g => g.code);
+  assert.deepEqual(codes, [...codes].sort());                                         // in number order
+  assert.ok(ghostAccounts([]).filter(g => g.name === 'Venmo balance').every(g => g.leaf && g.class === 'Assets'));
+});
+
+test('a savings account you add yourself is listed, and one you delete or nest is handled', () => {
+  try {
+    const a = addAccount([], {}, 'savings', 'Chase Savings 8527'); applyCustoms(a.customs);
+    assert.ok(ghostAccounts([]).some(g => g.key === a.id && g.leaf));
+    const hdr = addAccount(a.customs, {}, 'header', 'Savings', '', { section: '1' }); applyCustoms(hdr.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, a.id, hdr.id);
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const g = ghostAccounts([]);
+    assert.equal(g.find(x => x.key === hdr.id).leaf, false);                          // the Savings parent
+    assert.equal(g.find(x => x.key === a.id).leaf, true);                              // and the account under it, still a savings account
+    assert.equal(CATEGORIES[a.id].group, 'savings');
+  } finally { reset(); }
+});
+
+test('an account with nothing in it shows as a zero row under its parent, not as a parent itself', () => {
+  try {
+    const hdr = addAccount([], {}, 'header', 'Checking', '', { section: '1' }); applyCustoms(hdr.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, 'src:venmo', hdr.id);
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    const e = nestRows([], { rollup, hasOwn: () => false, ghosts: ghostAccounts([]).filter(g => g.class === 'Assets') });
+    const venmo = e.find(x => x.key === 'src:venmo');
+    assert.equal(venmo.kind, 'row');
+    assert.equal(venmo.data.total, 0);
+    assert.deepEqual(venmo.ancestors, [hdr.id]);                                       // so it folds away with its parent
+    assert.equal(e.find(x => x.key === hdr.id).kind, 'parent');
+  } finally { reset(); }
+});
+
+import { repairHeaders, selectableCategories } from '../app/src/categories.js';
+
+test('dragging a savings account under a heading keeps it a savings account (it used to become a heading and vanish)', () => {
+  try {
+    const a = addAccount([], {}, 'savings', 'Chase Savings 8527'); applyCustoms(a.customs);
+    const hdr = addAccount(a.customs, {}, 'header', 'Savings', '', { section: '1' }); applyCustoms(hdr.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: hdr.customs }, a.id, hdr.id);
+    assert.equal(st.customs.find(x => x.id === a.id).group, 'savings');
+    assert.equal(st.customs.find(x => x.id === hdr.id).header, true);                 // headings are marked as such
+    applyCustoms(st.customs); applyParents(st.parents); applyCoding(st.coding);
+    assert.ok(selectableCategories([]).some(c => c.id === a.id));                     // so it can still be picked, and holds a balance
+  } finally { reset(); }
+});
+
+test('an account dragged under a real account still takes that account\'s kind', () => {
+  try {
+    const a = addAccount([], {}, 'subscriptions', 'Netflix'); applyCustoms(a.customs);
+    const st = moveAccount({ coding: {}, parents: {}, customs: a.customs }, a.id, 'sub_streaming');
+    assert.equal(st.customs[0].group, 'subscriptions');
+  } finally { reset(); }
+});
+
+test('accounts an older version turned into headings are put back as accounts, and real headings are kept', () => {
+  const customs = [
+    { id: 'sub_aaa', group: 'header', code: '1200', name: 'Savings', match: [] },                      // has something under it: a real heading
+    { id: 'sub_bbb', parent: 'sub_aaa', group: 'header', code: '1210', name: 'Chase Savings 8527', match: [] },   // was an account
+    { id: 'sub_ccc', parent: 'sub_aaa', group: 'header', code: '1220', name: 'Chase Savings 9911', match: [] },
+    { id: 'sub_ddd', group: 'header', code: '1300', name: 'Receivable', header: true, match: [] },     // marked: left alone even though empty
+    { id: 'sub_eee', group: 'savings', code: '1400', name: 'Brokerage', match: [] },
+  ];
+  const fixed = repairHeaders(customs);
+  const by = Object.fromEntries(fixed.map(x => [x.id, x]));
+  assert.equal(by.sub_aaa.group, 'header');
+  assert.equal(by.sub_aaa.header, true);                                                         // now marked
+  assert.equal(by.sub_bbb.group, 'savings');                                                     // back to an asset account
+  assert.equal(by.sub_ccc.group, 'savings');
+  assert.equal(by.sub_ddd.group, 'header');
+  assert.equal(by.sub_eee.group, 'savings');
+  assert.equal(repairHeaders(fixed), fixed);                                                     // nothing left to fix: untouched
+  // a built-in account dragged under a custom heading counts as something under it
+  const lone = [{ id: 'sub_fff', group: 'header', code: '1200', name: 'Savings', match: [] }];
+  assert.equal(repairHeaders(lone, { save_chase: 'sub_fff' })[0].header, true);
+});

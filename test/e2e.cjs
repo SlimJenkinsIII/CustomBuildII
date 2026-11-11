@@ -66,7 +66,7 @@ server.listen(0, async () => {
     check('the test-files page is published', tf.ok());
     const links = [...(await tf.text()).matchAll(/href="(samples\/[^"]+\.csv)"/g)].map(m => m[1]);
     const got = await Promise.all(links.map(async l => { const r = await page.request.get(BASE + l); return r.ok() && (await r.text()).split('\n')[0].length > 10; }));
-    check('all six made-up statements download', links.length === 6 && got.every(Boolean), `(${links.length} links)`);
+    check('all seven made-up statements download', links.length === 7 && got.every(Boolean), `(${links.length} links)`);
     check('no real statements ride along', !fs.readdirSync(path.join(SITE, 'samples')).some(f => !f.startsWith('FAKE-')));
   }
   check('starts empty, unlocked', await page.locator('#empty').isVisible() && await page.locator('#lock').isHidden());

@@ -484,6 +484,7 @@ server.listen(0, async () => {
   const pickCodes = pickOpts.map(t => t.match(/^(\d{4})/)?.[1]).filter(Boolean);
   check('the category choices are in number order', pickCodes.length > 20 && pickCodes.join() === [...pickCodes].sort().join(), pickCodes.slice(0, 8).join(' '));
   check('the accounts you added are in the choices', pickOpts.some(t => /Netflix$/.test(t)) && pickOpts.some(t => /Roth IRA$/.test(t)));
+  check('once a trip exists, the "no trip yet" (7000) choices are not offered', !pickOpts.some(t => /no trip yet/i.test(t)) && pickOpts.some(t => /^7110 Lisbon/.test(t)));
   check('parent accounts that hold no money are not offered', !pickOpts.some(t => /Accounts Receivable$|^1000\s*Checking$/.test(t)));
   await page.click('#gl-count');
   check('Netflix charges file under the Netflix sub account on their own', /Netflix/.test(await glRow('NETFLIX').innerText()));

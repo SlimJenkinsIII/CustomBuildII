@@ -120,3 +120,15 @@ test('a trip can be renamed and its dates changed, with the same checks as addin
   assert.equal(CATEGORIES.vac1.name, 'Lisbon in May');                      // the 7100 account shows the new name
   applyTripNames([]);
 });
+
+test('once a trip exists, "no trip yet" (7000) is not offered as a choice, so it cannot be picked by mistake', () => {
+  const none = selectableCategories([]);
+  assert.ok(none.some(c => c.id === 'vac0_travel'));                      // before any trip, it is the only place for vacation spending
+  const trips = addTrip([], trip('Lisbon', '2026-05-01', '2026-05-09'));
+  const withTrip = selectableCategories(trips);
+  assert.ok(!withTrip.some(c => c.id.startsWith('vac0_')));
+  assert.ok(withTrip.some(c => c.id === 'vac1_travel'));                  // the trip's own five are there
+  assert.equal(withTrip.filter(c => c.class === 'Vacations').length, 5);
+  // the accounts themselves are untouched, so charges already filed there keep their place on the statements
+  assert.equal(CATEGORIES.vac0_travel.code, '7010');
+});

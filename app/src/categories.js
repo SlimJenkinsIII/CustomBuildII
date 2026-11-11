@@ -159,9 +159,12 @@ export function applyTripNames(trips = []) {
 // Categories you can pick for a transaction: everything except trip blocks that don't exist yet.
 export function selectableCategories(trips = []) {
   const live = liveFor(trips);
+  // Once you have a trip, "no trip yet" (7000) is not offered, so it can't be picked by mistake. (Charges the app files there,
+  // outside any trip's dates, still show on the statements.)
+  const unassignedOk = x => !(trips.length && x.slot === 0);
   // In number order, so your own accounts sit where their number puts them, not at the end. Anything that isn't an account comes last.
   return Object.values(CATEGORIES)
-    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && live(x))
+    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && live(x) && unassignedOk(x))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account', code: x.code ?? '9999', depth: x.code ? depthOf(x.id) : 0 }))
     .sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
 }

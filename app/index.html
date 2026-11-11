@@ -270,6 +270,8 @@
     .learned-key { font-weight: 600; }
     .learned-cat { grid-column: 1; color: var(--ink-2); font-size: 13px; }
     .learned-row .linkbtn { grid-row: 1 / span 2; grid-column: 2; }
+    .exp-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-2); flex: 1 1 140px; }
+    .exp-field input, .exp-field select { font: inherit; font-size: 15px; color: var(--ink); }
     .code-note { margin: 6px 0; font-size: 14px; }
     .code-note:empty { display: none; }
     #code-q { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 9px 14px; margin-top: 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
@@ -529,6 +531,7 @@
           <p class="sub" id="gl-count"></p>
           <div class="gl-controls" id="gl-controls"></div>
           <div class="chip-row" id="chips"></div>
+          <div id="gl-export"></div>
           <div class="scroll"><table id="out"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>GL account</th><th class="num">Amount</th></tr></thead><tbody></tbody></table></div>
           <div class="coverage" id="coverage"></div>
         </section>

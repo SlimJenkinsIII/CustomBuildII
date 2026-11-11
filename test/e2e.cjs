@@ -423,6 +423,29 @@ server.listen(0, async () => {
   check('category choice applied', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
   check('changing one charge in GL Detail teaches the app too: the merchant\'s other charges follow', (await page.locator('#out tbody tr', { hasText: 'MAGNOLIA CAFE' }).allInnerTexts()).every(t => t.includes('5400 Restaurants')));
 
+  // ---------- GL export ----------
+  await page.click('#gl-export-box summary');
+  check('the export panel previews how many entries are in the dates', /\d+ entries, \d+ lines, \$[\d,.]+ in debits and the same in credits/.test(await page.textContent('#exp-status')), await page.textContent('#exp-status'));
+  const grab = async () => { const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exp-download')]); return { text: fs.readFileSync(await dl.path(), 'utf8'), name: dl.suggestedFilename() }; };
+  const merchantCsv = await grab();
+  const csvLines = merchantCsv.text.trim().split('\r\n');
+  check('the download is a CSV with the ledger columns', csvLines[0] === 'Date,Entry,Account,Account name,Debit,Credit,Description,Bank or card,How it was filed' && csvLines.length > 50, merchantCsv.name);
+  const parseLine = l => { const out = []; let cur = '', q = false; for (let i = 0; i < l.length; i++) { const c = l[i]; if (q) { if (c === '"' && l[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; } else if (c === '"') q = true; else if (c === ',') { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; };
+  const csvCells = csvLines.slice(1).map(parseLine);
+  const deb = csvCells.reduce((t, c) => t + (Number(c[4]) || 0), 0), cre = csvCells.reduce((t, c) => t + (Number(c[5]) || 0), 0);
+  check('the exported debits equal the credits', Math.abs(deb - cre) < 0.005 && deb > 0, `${deb.toFixed(2)} vs ${cre.toFixed(2)}`);
+  check('by default it leaves out store numbers and places', !/AUSTIN|#\d|57444/.test(merchantCsv.text) && /WHOLEFDS MKT/.test(merchantCsv.text));
+  await page.selectOption('#exp-names', 'full');
+  check('"full" keeps the bank\'s wording', /AUSTIN TX/.test((await grab()).text));
+  await page.selectOption('#exp-names', 'none');
+  const bare = (await grab()).text;
+  check('"no names" leaves every description out', !/WHOLEFDS|SHELL|MAGNOLIA|DELTA|AUSTIN/.test(bare));
+  await page.selectOption('#exp-names', 'merchant');
+  await page.fill('#exp-from', '2026-02-01'); await page.fill('#exp-to', '2026-02-28'); await page.press('#exp-to', 'Tab');
+  const feb = await grab();
+  check('a date range keeps only those dates, and the file name says which', feb.name === 'gl-export-2026-02-01-to-2026-02-28.csv' && feb.text.trim().split('\r\n').slice(1).every(l => l.startsWith('2026-02-')), feb.name);
+  check('account numbers and balances are not in the file', !/\b1044\b|opening balance|passphrase/i.test(feb.text));
+
 
 
   // ---------- drill down from Budget and come back ----------

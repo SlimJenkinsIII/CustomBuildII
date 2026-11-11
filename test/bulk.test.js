@@ -10,6 +10,9 @@ test('store numbers and places drop out, so one merchant lines up', () => {
   assert.equal(merchantKey('TST* BLUE BOTTLE 0042'), 'BLUE BOTTLE');          // card-processor prefixes are skipped
   assert.equal(merchantKey('SQ *BLUE BOTTLE COFFEE'), 'BLUE BOTTLE');
   assert.equal(merchantKey('7-ELEVEN 33071'), 'ELEVEN');
+  assert.equal(merchantKey('CHIPOTLE 1234 AUSTIN TX'), 'CHIPOTLE');            // everything after the store number is a place
+  assert.equal(merchantKey('SHELL OIL 57444 AUSTIN TX'), 'SHELL OIL');
+  assert.equal(merchantKey('EL TIEMPO CANTINA HOUSTON'), 'EL TIEMPO');          // no number to go by: the first two words
   assert.equal(merchantKey(''), '');
   assert.equal(merchantKey(undefined), '');
 });

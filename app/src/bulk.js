@@ -7,7 +7,16 @@
 // "TST* BLUE BOTTLE" and "BLUE BOTTLE COFFEE" read as the same place. Used to select, and to remember, a merchant.
 const PREFIXES = new Set(['TST', 'SQ', 'SP', 'POS', 'DEBIT', 'PURCHASE', 'CHECKCARD', 'RECURRING', 'PMT']);
 export function merchantKey(description) {
-  let words = String(description ?? '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter(w => w.length >= 2);
+  const tokens = String(description ?? '').toUpperCase().split(/\s+/).filter(Boolean);
+  // The name is what comes before the first store number ("CHIPOTLE 1234 AUSTIN TX" -> CHIPOTLE): what follows is a place.
+  let words = [];
+  for (const tok of tokens) {
+    if (/[0-9#]/.test(tok)) break;
+    const w = tok.replace(/[^A-Z]/g, '');
+    if (w.length >= 2) words.push(w);
+  }
+  // No number to go by (or it came first, as in "7-ELEVEN 33071"): use the letters, without numbers or punctuation.
+  if (!words.length) words = String(description ?? '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter(w => w.length >= 2);
   while (words.length > 1 && PREFIXES.has(words[0])) words = words.slice(1);
   return words.slice(0, 2).join(' ');
 }

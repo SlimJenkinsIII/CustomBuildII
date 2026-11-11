@@ -3,6 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
@@ -28,7 +29,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, sync: null,
-  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
+  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
@@ -689,7 +690,52 @@ function renderGlRows() {
     h('div', { text: `${sourceLabel(c.account)}: ${fmtDate(c.from)} to ${fmtDate(c.to)} (${plural(c.count, 'transaction', 'transactions')})` })));
 }
 
-function renderLedger() { renderGlControls(); renderGlRows(); }
+function renderLedger() { renderGlControls(); renderGlRows(); renderGlExport(); }
+
+// ---------- GL export: the ledger for a range of dates, as a file you can save or share ----------
+function saveText(name, text, type = 'text/csv') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = h('a', { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function renderGlExport() {
+  const box = $('gl-export');
+  if (!state.txs.length) { box.replaceChildren(); return; }
+  const x = state.exp;
+  const dates = state.txs.map(t => t.date).sort();
+  const first = dates[0], last = dates[dates.length - 1];
+  const range = () => ({ from: $('exp-from').value || first, to: $('exp-to').value || last });
+  const current = () => glExport(state.txs, { ...range(), names: $('exp-names').value });
+  const status = h('p', { class: 'note', id: 'exp-status', role: 'status' });
+  const refresh = () => {
+    const out = current();
+    x.from = $('exp-from').value; x.to = $('exp-to').value; x.names = $('exp-names').value;
+    status.textContent = out.entries ? `${plural(out.entries, 'entry', 'entries')}, ${plural(out.rows.length, 'line', 'lines')}, ${money2(out.debit)} in debits and the same in credits.` : 'Nothing in those dates.';
+    $('exp-download').disabled = $('exp-share') ? ($('exp-share').disabled = !out.entries) : !out.entries;
+  };
+  const file = () => { const { from, to } = range(); return { name: exportFileName(from, to), text: toCsv(...(o => [o.header, o.rows])(current())) }; };
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [new File(['x'], 'x.csv', { type: 'text/csv' })] });
+  fill(box, h('details', { class: 'fine', id: 'gl-export-box', open: x.open, ontoggle: e => { x.open = e.target.open; } },
+    h('summary', { text: 'Export the ledger for these dates' }),
+    h('div', { class: 'stack', style: 'margin-top:8px' },
+      h('p', { class: 'note', text: 'Saves every debit and credit in the dates you choose as a spreadsheet file (CSV), ready to analyse. It stays on this device until you send it somewhere. Account numbers and balances are never included.' }),
+      h('div', { class: 'row-form' },
+        h('label', { class: 'exp-field' }, h('span', { text: 'From' }), h('input', { id: 'exp-from', type: 'date', value: x.from || first, min: first, max: last, onchange: refresh })),
+        h('label', { class: 'exp-field' }, h('span', { text: 'To' }), h('input', { id: 'exp-to', type: 'date', value: x.to || last, min: first, max: last, onchange: refresh }))),
+      h('label', { class: 'exp-field' }, h('span', { text: 'How much wording to include' }),
+        h('select', { id: 'exp-names', onchange: refresh }, NAME_MODES.map(([k, label]) => h('option', { value: k, text: label, selected: k === x.names })))),
+      status,
+      h('div', { class: 'row-form' },
+        h('button', { type: 'button', class: 'btn', id: 'exp-download', text: 'Download CSV', onclick: () => { const f = file(); saveText(f.name, f.text); } }),
+        canShare && h('button', { type: 'button', class: 'btn ghost', id: 'exp-share', text: 'Share…', onclick: async () => {
+          const f = file();
+          try { await navigator.share({ files: [new File([f.text], f.name, { type: 'text/csv' })], title: 'Ledger export' }); } catch { /* cancelled */ }
+        } }),
+        h('button', { type: 'button', class: 'btn ghost', id: 'exp-chart', text: 'Account list', onclick: () => { const c = chartExport(state.trips); saveText('chart-of-accounts.csv', toCsv(c.header, c.rows)); } })))));
+  refresh();
+}
 
 // ---------- Budget tab: looking back ----------
 // Backward-looking on purpose: you add statements in batches, so "this week" is rarely a full week. Everything

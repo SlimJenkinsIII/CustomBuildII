@@ -68,7 +68,7 @@ function venmoRows(text) {
 }
 
 export function venmo(rows, account) {
-  const out = [];
+  const out = [], details = [];
   let external = 0, ignored = 0;
   for (const r of rows) {
     if (!r['Datetime'] || !r['Amount (total)']) continue;                       // the balance rows at the top and bottom
@@ -78,7 +78,11 @@ export function venmo(rows, account) {
     const type = r['Type'];
     const transfer = TRANSFER_TYPE.test(type);
     const fromBalance = !r['Funding Source'] || /venmo balance/i.test(r['Funding Source']);
-    if (cents < 0 && !transfer && !fromBalance) { external++; continue; }        // paid from a bank or card: it is on that statement
+    if (cents < 0 && !transfer && !fromBalance) {                                // paid from a bank or card: it is on that statement
+      external++;
+      details.push({ date: r['Datetime'].slice(0, 10), cents, party: r['To'] || '', note: r['Note'] });   // kept only to say who and why
+      continue;
+    }
     const party = (cents > 0 ? r['From'] : r['To']) || '';
     const note = r['Note'];
     const description = transfer
@@ -86,7 +90,7 @@ export function venmo(rows, account) {
       : `${cents > 0 ? 'FROM' : 'TO'} ${party.toUpperCase()}${note ? `: ${note}` : ''}`.trim();
     out.push({ date: r['Datetime'].slice(0, 10), description, cents, account, source: 'venmo' });
   }
-  return { transactions: out, notes: { external, ignored } };
+  return { transactions: out, notes: { external, ignored, details } };
 }
 
 export function detectFormat(headers) {

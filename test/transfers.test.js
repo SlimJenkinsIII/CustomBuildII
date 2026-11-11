@@ -52,3 +52,25 @@ test('each transaction pairs only once (two equal payments, two equal receipts)'
   assert.equal(r[0].pairId, r[2].id);
   assert.equal(r[1].pairId, r[3].id);
 });
+
+test('the two halves of a Chase transfer pair by their shared transaction number, even inside one account and days apart', () => {
+  const rows = matchTransfers(withIds([
+    { account: 'chase-checking', date: '2026-10-19', cents: -20000, description: 'Online Transfer to SAV ...8527 transaction#: 31092522089' },
+    { account: 'chase-checking', date: '2026-10-19', cents: 20000, description: 'Online Transfer from CHK ...1044 transaction#: 31092522089' },
+    { account: 'chase-checking', date: '2026-10-20', cents: -5000, description: 'Online Transfer to SAV ...8527 transaction#: 31099999999' },
+    { account: 'chase-checking', date: '2026-10-25', cents: 5000, description: 'Online Transfer from CHK ...1044 transaction#: 31099999999' },
+  ]));
+  assert.deepEqual(rows.map(r => r.transfer), ['matched', 'matched', 'matched', 'matched']);
+  assert.equal(rows[0].pairId, rows[1].id);
+  assert.equal(rows[2].pairId, rows[3].id);                                    // five days apart, still the same transfer
+});
+
+test('the same transaction number is not enough on its own: amounts must be equal and opposite, and it must appear exactly twice', () => {
+  const wrongAmount = matchTransfers(withIds([
+    { account: 'chase-checking', date: '2026-10-19', cents: -20000, description: 'Online Transfer to SAV transaction#: 31092522089' },
+    { account: 'chase-checking', date: '2026-10-19', cents: 19000, description: 'Online Transfer from CHK transaction#: 31092522089' },
+  ]));
+  assert.notEqual(wrongAmount[0].pairId, wrongAmount[1].id);
+  const alone = matchTransfers(withIds([{ account: 'chase-checking', date: '2026-10-19', cents: -20000, description: 'Online Transfer to SAV transaction#: 31092522089' }]));
+  assert.equal(alone[0].transfer, 'unmatched');                                // one half only: still waiting for the other
+});

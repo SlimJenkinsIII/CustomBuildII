@@ -1,6 +1,7 @@
 // Importing a Venmo CSV in a real browser.   NODE_PATH=$(npm root -g) node test/e2e-venmo.cjs
 const { chromium } = require('playwright');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
 
@@ -25,11 +26,17 @@ server.listen(0, async () => {
   page.on('console', m => { if (m.type() === 'error' || /Content Security Policy/i.test(m.text())) problems.push(m.text()); });
   await page.goto(`http://localhost:${server.address().port}/`);
   const samples = f => path.join(ROOT, 'samples', f);
-  await page.setInputFiles('#file', [samples('FAKE-chase-checking.csv'), samples('FAKE-venmo.csv')]);
+  // a bank file with the bare VENMO PAYMENT line, and both halves of one transfer between two of your Chase accounts
+  const bank = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'venmo-')), 'bank.csv');
+  fs.writeFileSync(bank, 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n'
+    + 'DEBIT,03/06/2026,"VENMO PAYMENT 1053903953802 WEB ID: 3264681992",-60.00,ACH_DEBIT,100.00,,\n'
+    + 'DEBIT,03/07/2026,"Online Transfer to SAV ...8527 transaction#: 31092522089",-200.00,ACCT_XFER,100.00,,\n'
+    + 'CREDIT,03/07/2026,"Online Transfer from CHK ...1044 transaction#: 31092522089",200.00,ACCT_XFER,300.00,,\n');
+  await page.setInputFiles('#file', [samples('FAKE-chase-checking.csv'), samples('FAKE-venmo.csv'), bank]);
   await page.waitForSelector('#panel-budget:not([hidden])');
   const status = await page.textContent('#status');
   check('the Venmo file imports', /Added \d+ transactions/.test(status), status);
-  check('it says one bank-funded payment was left out, and why', /1 Venmo payment you funded from a bank or card was left out: it is already on that statement/.test(status));
+  check('it says one bank-funded payment was left out, and why', /1 Venmo payment you funded from a bank or card was not counted again/.test(status));
 
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const rows = await page.locator('#out tbody tr', { hasText: 'Venmo balance' }).allInnerTexts();
@@ -38,6 +45,11 @@ server.listen(0, async () => {
   check('a payment you made from your Venmo balance is an item to sort too', rows.some(t => /TO SAM SAMPLE: Rent share/.test(t) && /5900/.test(t)));
   check('the cash-out to the bank is held as a transfer, not spending', rows.some(t => /VENMO TRANSFER TO BANK/.test(t) && !/5900/.test(t)));
 
+  const reworded = await page.locator('#out tbody tr', { hasText: 'TO RILEY DEMO: Concert tickets' }).allInnerTexts();
+  check('a bare VENMO PAYMENT on the bank now says who you paid and why', reworded.length === 1 && /Chase checking/.test(reworded[0]) && /5900/.test(reworded[0]), reworded.join(' | ').replace(/\s+/g, ' '));
+  check('the original bank wording is gone from the list, and the payment is not counted twice', (await page.locator('#out tbody tr', { hasText: '1053903953802' }).count()) === 0 && (await page.locator('#out tbody tr', { hasText: 'Concert tickets' }).count()) === 1);
+  const xfer = await page.locator('#out tbody tr', { hasText: 'transaction#: 31092522089' }).allInnerTexts();
+  check('the two halves of a transfer between your own accounts pair up and are not spending', xfer.length === 2 && xfer.every(t => /Transfer \(not spending\)/.test(t)), xfer.join(' | ').replace(/\s+/g, ' '));
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Opening balances' }).click();
   check('Venmo balance can be given an opening balance, like checking', /Venmo balance/.test(await page.textContent('#settings-body')));
   await page.click('#settings-close');

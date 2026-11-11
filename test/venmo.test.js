@@ -7,6 +7,7 @@ import { matchTransfers } from '../app/src/transfers.js';
 import { categorize } from '../app/src/rules.js';
 import { buildJournal, totalsOf, trialBalance } from '../app/src/journal.js';
 import { SOURCE_ACCOUNTS, SOURCE_ROLES } from '../app/src/categories.js';
+import { enrichVenmo, mergeDetails, cleanDetails } from '../app/src/venmodetail.js';
 
 const SAMPLE = readFileSync(new URL('../samples/FAKE-venmo.csv', import.meta.url), 'utf8');
 
@@ -25,7 +26,8 @@ test('only what moves the Venmo balance is imported', () => {
   assert.equal(byDesc['FROM JORDAN TEST: Utilities'].cents, 8525);                  // a charge someone paid you
   assert.equal(byDesc['VENMO TRANSFER TO BANK (Sample Bank Checking)'].cents, -10000);   // cashed out to the bank
   assert.equal(byDesc['TO CORNER CAFE: Coffee'].cents, -575);
-  assert.deepEqual(out.notes, { external: 1, ignored: 2 });                         // one funded by the bank, two pending or cancelled
+  assert.deepEqual({ external: out.notes.external, ignored: out.notes.ignored }, { external: 1, ignored: 2 });   // one funded by the bank, two pending or cancelled
+  assert.deepEqual(out.notes.details, [{ date: '2026-03-05', cents: -6000, party: 'Riley Demo', note: 'Concert tickets' }]);   // kept only to say who and why
   assert.ok(!out.transactions.some(t => /Concert/.test(t.description)));            // the bank-funded one is on the bank statement
   assert.ok(!out.transactions.some(t => /Lunch|Gift/.test(t.description)));        // pending and cancelled moved no money
 });
@@ -85,4 +87,44 @@ test('a cash-out with no deposit imported yet is held as a transfer, not left in
   const cash = rows.find(r => /TRANSFER TO BANK/.test(r.description));
   assert.equal(cash.category, 'transfer');
   assert.match(cash.categoryReason, /Venmo cash-out/);
+});
+
+const D = (date, cents, party, note) => ({ date, cents, party, note });
+const bankLine = (date, cents, description, id = date + description) => ({ id, account: 'chase-checking', date, cents, description });
+
+test('a bare VENMO PAYMENT on the bank statement is reworded with who you paid and why, once, by amount and nearby date', () => {
+  const txs = [bankLine('2026-03-06', -6000, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992'), bankLine('2026-03-06', -6000, 'WHOLEFDS MKT #1')];
+  const out = enrichVenmo(txs, [D('2026-03-05', -6000, 'Riley Demo', 'Concert tickets')]);
+  assert.equal(out[0].description, 'TO RILEY DEMO: Concert tickets');
+  assert.equal(out[0].bankDescription, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992');   // the original wording is kept
+  assert.equal(out[0].id, txs[0].id);                                                         // same id: your choices on it stay attached
+  assert.equal(out[1].description, 'WHOLEFDS MKT #1');                                        // nothing else is touched
+});
+
+test('each Venmo detail is used once, the closest date wins, and far-off or different amounts are not matched', () => {
+  const txs = [bankLine('2026-03-04', -2500, 'VENMO PAYMENT 1', 'a'), bankLine('2026-03-09', -2500, 'VENMO PAYMENT 2', 'b'), bankLine('2026-03-05', -2600, 'VENMO PAYMENT 3', 'c')];
+  const out = enrichVenmo(txs, [D('2026-03-08', -2500, 'Sam Sample', 'Rent'), D('2026-03-20', -2500, 'Far Away', 'Too late')]);
+  assert.equal(out.find(t => t.id === 'b').description, 'TO SAM SAMPLE: Rent');             // March 8 is closer to March 9 than to March 4
+  assert.equal(out.find(t => t.id === 'a').description, 'VENMO PAYMENT 1');
+  assert.equal(out.find(t => t.id === 'c').description, 'VENMO PAYMENT 3');                 // different amount
+  assert.equal(enrichVenmo(txs, []), txs);
+});
+
+test('a line you entered by hand, or on the Venmo account itself, is never reworded', () => {
+  const txs = [{ ...bankLine('2026-03-05', -6000, 'VENMO PAYMENT 9'), byHand: true }, { ...bankLine('2026-03-05', -6000, 'VENMO CASHOUT'), account: 'venmo' }];
+  assert.deepEqual(enrichVenmo(txs, [D('2026-03-05', -6000, 'A B', 'x')]), txs);
+});
+
+test('details are merged without repeats, and nonsense in saved data is dropped', () => {
+  const a = D('2026-03-05', -6000, 'Riley Demo', 'Concert tickets');
+  assert.equal(mergeDetails([a], [{ ...a }, D('2026-03-06', -100, 'X Y', '')]).length, 2);
+  assert.deepEqual(cleanDetails([a, { date: 'bad', cents: -1, party: 'x', note: '' }, { date: '2026-01-01', cents: 5, party: 'x', note: '' }, 7]), [a]);
+  assert.deepEqual(cleanDetails(null), []);
+});
+
+test('the reworded line can then be sorted by who it went to, and a friend\'s name is not a transfer word', () => {
+  const rows = categorize(matchTransfers(enrichVenmo(withIds([bankLine('2026-03-06', -6000, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992')]), [D('2026-03-05', -6000, 'Riley Demo', 'Concert tickets')])));
+  assert.equal(rows[0].description, 'TO RILEY DEMO: Concert tickets');
+  assert.equal(rows[0].category, 'review');
+  assert.ok(!rows[0].transfer);
 });

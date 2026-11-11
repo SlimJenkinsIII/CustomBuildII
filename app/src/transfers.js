@@ -13,6 +13,7 @@
 const HINT = /payment|pymt|transfer|xfer|epayment|autopay|zelle|venmo|cash app|paypal|thank you/i;
 const MAX_DAYS = 5;
 const CASH_OUT = /^VENMO TRANSFER TO BANK/;
+const TXN_NO = /transaction\s*#\s*:?\s*(\d{6,})/i;
 
 const dayNumber = iso => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000);
 
@@ -39,6 +40,20 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS } = {}) {
 
   const used = new Set();
   const info = new Map(); // id -> { transfer, pairId }
+  // Chase prints the same transaction number on both halves of a transfer ("... transaction#: 31092522089"). Two lines that
+  // share one, with equal and opposite amounts, are the two halves, whatever account each landed in and however many days apart.
+  const byNumber = new Map();
+  for (const t of transactions) {
+    const n = TXN_NO.exec(t.description ?? '')?.[1];
+    if (n && !t.byHand) byNumber.set(n, [...(byNumber.get(n) ?? []), t]);
+  }
+  for (const [, pair] of byNumber) {
+    if (pair.length !== 2 || pair[0].cents !== -pair[1].cents || pair[0].cents === 0) continue;
+    const [a, b] = pair;
+    used.add(a.id); used.add(b.id);
+    info.set(a.id, { transfer: 'matched', pairId: b.id });
+    info.set(b.id, { transfer: 'matched', pairId: a.id });
+  }
   for (const c of candidates) {
     if (used.has(c.o.id) || used.has(c.i.id)) continue;
     used.add(c.o.id); used.add(c.i.id);

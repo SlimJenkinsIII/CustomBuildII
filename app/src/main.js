@@ -3,6 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
@@ -28,7 +29,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -77,7 +78,7 @@ function recompute() {
   applyParents(state.parents);
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
+  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(state.raw, state.venmoDetail)), { userRules: customRules(state.customs) }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -92,25 +93,26 @@ function recompute() {
 
 async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
-  let added = 0, skipped = 0, external = 0;
+  let added = 0, skipped = 0, external = 0, details = [];
   try {
     for (const file of files) {
       let parsed;
       try { parsed = parseStatement(await file.text()); }
       catch (err) { throw new Error(`${file.name}: ${err.message}`); }
       const r = mergeTransactions(state.raw, withIds(parsed.transactions));
-      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; external += parsed.notes?.external ?? 0;
+      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; external += parsed.notes?.external ?? 0; details = details.concat(parsed.notes?.details ?? []);
     }
+    state.venmoDetail = mergeDetails(state.venmoDetail, details);
     $('status').textContent = `Added ${plural(added, 'transaction', 'transactions')}` +
       (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.' +
-      (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} left out: ${external === 1 ? 'it is' : 'they are'} already on that statement.` : '');
+      (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} not counted again (${external === 1 ? 'it is' : 'they are'} already on that statement); I used ${external === 1 ? 'it' : 'them'} to say who you paid and why.` : '');
   } catch (err) {
     $('status').textContent = err.message;
   }
   resetGl();
   recompute();
   render();
-  if (added) markDirty();
+  if (added || details.length) markDirty();
 }
 $('file').addEventListener('change', e => {
   const files = [...e.target.files];
@@ -119,7 +121,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -134,6 +136,7 @@ function loadSnapshot(d) {
   applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
   state.learned = cleanLearned(Object.fromEntries(Object.entries(d.learned ?? {}).map(([k, r]) => [k, r && { ...r, c: migrateCategory(r.c) }])), id => !!CATEGORIES[id]);
+  state.venmoDetail = cleanDetails(d.venmoDetail);
   state.fuel = cleanFuel(d.fuel, id => !!CATEGORIES[migrateCategory(id)]);
   state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
@@ -141,7 +144,7 @@ function loadSnapshot(d) {
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }

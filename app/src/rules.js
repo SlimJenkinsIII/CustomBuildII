@@ -1,7 +1,19 @@
 // Rules: "if the description contains X, it's category Y". First match wins; YOUR rules go first.
 // Matching is whole-word and case-insensitive ("SHELL" matches "SHELL OIL 5744" but not "SHELLEY'S").
 // Optional `sign: 'in' | 'out'` restricts a rule to money in or money out.
-import { CATEGORIES } from './categories.js';
+import { CATEGORIES, SOURCE_ROLES } from './categories.js';
+
+// Paying off a credit card is not spending: it moves money from where you paid it (usually checking) to the card.
+// On the card's own statement a payment is money in with "payment" or "thank you" in it. On the paying account it reads
+// like "payment to Chase card" or "Amex autopay". When the other half hasn't been imported, these still file as a
+// transfer (held in "transfers in transit" until it arrives) instead of cluttering Needs review.
+const PAYMENT_WORDS = /payment|pymt|pmt|epay|autopay|thank you/i;
+const CARD_WORDS = /\bcard\b|\bcrd\b|amex|american express|chase credit|credit card/i;
+export function isCardPayment(t) {
+  if (!PAYMENT_WORDS.test(t.description)) return false;
+  if (SOURCE_ROLES[t.account] === 'liability') return t.cents > 0;                 // money coming in to a card, worded as a payment
+  return t.cents < 0 && CARD_WORDS.test(t.description);                            // money leaving a bank, worded as a card payment
+}
 
 const r = (category, sign, ...contains) => contains.map(text => ({ contains: text, category, ...(sign && { sign }) }));
 
@@ -68,6 +80,9 @@ export function categorize(transactions, {
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';
       why = savingsCat ? `transfer into ${other.account}` : 'matched transfer';
+    } else if (t.transfer === 'unmatched' && isCardPayment(t)) {
+      category = 'transfer';
+      why = 'card payment (the other account isn’t imported yet)';
     } else {
       const rule = allRules.find(x => ruleMatches(x, t));
       if (rule) { category = rule.category; why = `rule: ${rule.contains}`; }

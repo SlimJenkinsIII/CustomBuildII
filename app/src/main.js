@@ -673,7 +673,7 @@ function renderGlRows() {
   const body = $('out').querySelector('tbody');
   body.replaceChildren();
   for (const t of list) {
-    const notes = [t.transfer === 'unmatched' && t.category === 'review' && 'other side not imported', t.transfer === 'suggested' && 'possible transfer', t.askReimbursement && 'paid back?', t.chosen && 'your choice', t.byHand && 'entered by hand'].filter(Boolean);
+    const notes = [t.transfer === 'unmatched' && t.category === 'review' && 'other side not imported', t.transfer === 'unmatched' && t.category === 'transfer' && 'card payment · other account not imported', t.transfer === 'suggested' && 'possible transfer', t.askReimbursement && 'paid back?', t.chosen && 'your choice', t.byHand && 'entered by hand'].filter(Boolean);
     const tr = body.insertRow();
     tr.insertCell().textContent = fmtDate(t.date);
     tr.insertCell().textContent = t.description;

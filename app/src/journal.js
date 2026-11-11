@@ -52,7 +52,8 @@ export function buildJournal(txs) {
         continue;
       }
     }
-    const offsetKey = t.category === 'transfer' ? SUSPENSE : t.category;   // a lone transfer row has no other half
+    // A lone transfer row has no other half imported yet, so the other side waits in transfers in transit (it is never an expense).
+    const offsetKey = t.category === 'transfer' ? 'clearing' : t.category;
     entries.push({ date: t.date, memo: t.description, txIds: [t.id], lines: [mine, side(offsetKey, -t.cents)] });
   }
   return entries;

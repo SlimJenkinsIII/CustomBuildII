@@ -260,6 +260,23 @@
     td.acct.own-line { padding-left: calc(10px + var(--depth, 1) * 18px); font-style: italic; font-weight: 400; }
     table.mx tr.hdr-acct td { font-weight: 600; font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--ink); background: transparent; }
     .sub-add select, .sub-add input { max-width: 100%; }
+
+    /* coding many items at once */
+    .code-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px 12px; margin: 8px 0; border-radius: 14px; border: 1px solid var(--line); background: var(--card); box-shadow: 0 4px 14px rgba(0, 0, 0, .08); }
+    .code-bar.on { border-color: var(--blue); }
+    .code-bar .count { font-weight: 600; font-size: 14px; flex: 1 1 100%; }
+    .code-bar select { flex: 1 1 220px; min-width: 0; max-width: 100%; }
+    .code-note { margin: 6px 0; font-size: 14px; }
+    .code-note:empty { display: none; }
+    #code-q { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 9px 14px; margin-top: 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+    table.coding td, table.coding th { padding: 8px 6px; vertical-align: top; }
+    table.coding td.pick { width: 34px; }
+    table.coding input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--blue); }
+    table.coding tr.sel td { background: color-mix(in srgb, var(--blue) 10%, transparent); }
+    table.coding .merchant { display: block; }
+    table.coding .linkbtn.similar { font-size: 12px; }
+    table.coding td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    @media (max-width: 600px) { table.coding .col-acct { display: none; } }
     /* the front door: while it is closed, the app is not shown at all */
     /* the home screen: a picture, the time, and a swipe-up to the password. Used for the access code and for the passphrase lock. */
     #home { display: none; position: fixed; inset: 0; z-index: 900; background: #1a2230; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -436,6 +453,7 @@
       <div class="tabs" role="tablist" aria-label="Views">
         <button class="tab" role="tab" id="tab-summary" aria-selected="false" aria-controls="panel-summary" type="button">Summary</button>
         <button class="tab" role="tab" id="tab-budget" aria-selected="true" aria-controls="panel-budget" type="button">Budget</button>
+        <button class="tab" role="tab" id="tab-code" aria-selected="false" aria-controls="panel-code" type="button">Coding</button>
         <button class="tab" role="tab" id="tab-investments" aria-selected="false" aria-controls="panel-investments" type="button">Investments</button>
         <button class="tab" role="tab" id="tab-savings" aria-selected="false" aria-controls="panel-savings" type="button">Savings</button>
         <button class="tab" role="tab" id="tab-fs" aria-selected="false" aria-controls="panel-fs" type="button">F/S</button>
@@ -468,6 +486,10 @@
           <summary id="plan-line">Your plan</summary>
           <div id="plan-body"></div>
         </details>
+      </div>
+
+      <div class="panel" id="panel-code" role="tabpanel" aria-labelledby="tab-code" hidden>
+        <section class="card" id="code-body" aria-labelledby="code-title"></section>
       </div>
 
       <div class="panel" id="panel-investments" role="tabpanel" aria-labelledby="tab-investments" hidden>

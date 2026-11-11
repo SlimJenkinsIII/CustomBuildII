@@ -84,7 +84,7 @@ server.listen(0, async () => {
   await other.close(); framer.close();
 
   const labels = await page.locator('[role=tab]').allTextContents();
-  check('six tabs in the right order, with F/S replacing TB Summary and GL Detail', labels.join('|') === 'Summary|Budget|Investments|Savings|F/S|Tie-out', labels.join('|'));
+  check('seven tabs in the right order, with Coding after Budget', labels.join('|') === 'Summary|Budget|Coding|Investments|Savings|F/S|Tie-out', labels.join('|'));
   check('Budget is the landing tab', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
   for (const t of ['summary', 'investments', 'savings']) {
     await page.click(`#tab-${t}`);
@@ -370,6 +370,29 @@ server.listen(0, async () => {
   await mag.locator('.linkbtn').click();
   await mag.locator('select').selectOption('free_restaurants');
   check('category choice applied', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
+
+  // ---------- the Coding tab: many items at once ----------
+  await page.click('#tab-code');
+  const toReview = await page.locator('#code-rows tr .merchant').count();
+  check('the Coding tab lists what still needs review, and the tab shows how many', toReview > 0 && new RegExp(`Coding · ${toReview}$`).test(await page.textContent('#tab-code')), `${toReview}`);
+  check('the account choices are in number order', await page.locator('#code-choose option').evaluateAll(os => { const c = os.map(o => o.textContent.replace(/\u00a0/g, '').trim().match(/^(\d{4})/)?.[1]).filter(Boolean); return c.length > 20 && c.join() === [...c].sort().join(); }));
+  await page.locator('#code-rows tr').first().locator('.similar').click();
+  const pickedSimilar = await page.locator('#code-rows tr.sel').count();
+  check('"Same merchant" ticks every charge from it', pickedSimilar >= 1 && /selected/.test(await page.textContent('#code-count')), `${pickedSimilar}`);
+  await page.click('#code-clear');
+  check('Clear unticks everything and turns Apply off', (await page.locator('#code-rows tr.sel').count()) === 0 && await page.locator('#code-apply').isDisabled());
+  await page.check('#code-all');
+  check('the header box ticks everything shown', (await page.locator('#code-rows tr.sel').count()) === toReview);
+  await page.selectOption('#code-choose', 'free_shopping');
+  await page.click('#code-apply');
+  await page.waitForFunction(() => /coded as/.test(document.getElementById('code-note').textContent));
+  check('applying codes them all in one go and says what happened', new RegExp(`${toReview} item`).test(await page.textContent('#code-note')) && /5450/.test(await page.textContent('#code-note')));
+  check('nothing is left to review, and the tab count goes away', (await page.textContent('#code-rows')).includes('Nothing left to review') && (await page.textContent('#tab-code')) === 'Coding');
+  await page.click('#code-undo');
+  await page.waitForFunction(() => /Undone/.test(document.getElementById('code-note').textContent));
+  check('Undo puts every item back as it was', (await page.locator('#code-rows tr .merchant').count()) === toReview);
+  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+
 
   // ---------- drill down from Budget and come back ----------
   await page.click('#tab-budget');

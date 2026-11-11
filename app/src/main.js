@@ -3,6 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
+import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
@@ -26,7 +27,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
   raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, sync: null,
-  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w',
+  txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
   vault: null, envelope: null, locked: false, save: 'idle', persisted: false,
@@ -458,13 +459,18 @@ function visibleTxs() {
   return [...list].reverse();
 }
 
-// Swaps a row's category label for a picker. Your choice is remembered and beats the automatic one.
-function openPicker(cell, t) {
+// The account choices, in number order and grouped by section, with your own accounts and sub accounts in place.
+function categoryOptions(selected) {
   const groups = new Map();
   for (const c of selectableCategories(state.trips)) {
     if (!groups.has(c.class)) groups.set(c.class, []);
     groups.get(c.class).push(c);
   }
+  return [...groups].map(([cls, items]) => h('optgroup', { label: cls }, items.map(c => h('option', { value: c.id, text: '\u00a0\u00a0'.repeat(c.depth) + c.label, selected: c.id === selected }))));
+}
+
+// Swaps a row's category label for a picker. Your choice is remembered and beats the automatic one.
+function openPicker(cell, t) {
   const select = h('select', { 'aria-label': `Category for ${t.description}`,
     onchange: e => {
       if (e.target.value === '__auto') delete state.overrides[t.id]; else state.overrides[t.id] = e.target.value;
@@ -472,9 +478,105 @@ function openPicker(cell, t) {
     },
     onblur: () => renderGlRows() },
     h('option', { value: '__auto', text: 'Let the app decide' }),
-    [...groups].map(([cls, items]) => h('optgroup', { label: cls }, items.map(c => h('option', { value: c.id, text: '\u00a0\u00a0'.repeat(c.depth) + c.label, selected: c.id === t.category })))));
+    categoryOptions(t.category));
   cell.replaceChildren(select);
   select.focus();
+}
+
+// ---------- the Coding tab: pick many items, give them an account in one go ----------
+function renderCoding() {
+  const b = state.bulk, root = $('code-body');
+  const everything = filterItems(state.txs, { view: 'all' });
+  const left = state.txs.filter(t => t.category === 'review').length;
+  const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort().reverse();
+  const choose = h('select', { id: 'code-choose', 'aria-label': 'Account for the selected items' },
+    h('option', { value: '', text: 'Choose an account…' }), h('option', { value: '__auto', text: 'Let the app decide' }), categoryOptions(null));
+  const apply = h('button', { type: 'button', class: 'btn', id: 'code-apply', text: 'Apply', onclick: () => {
+    const ids = [...b.sel].filter(id => state.txs.some(t => t.id === id));
+    if (!ids.length || !choose.value) return;
+    const out = applyBulk(state.overrides, ids, choose.value);
+    state.overrides = out.next;
+    const label = choose.value === '__auto' ? 'the app’s own choice' : codeLabel(choose.value);
+    b.undo = { previous: out.previous, text: `${plural(ids.length, 'item', 'items')} coded as ${label}` };
+    b.note = `${plural(ids.length, 'item', 'items')} coded as ${label}.`;
+    b.sel.clear(); b.last = null;
+    recompute(); render(); markDirty();
+  } });
+  const undo = b.undo && h('button', { type: 'button', class: 'btn ghost', id: 'code-undo', text: 'Undo', onclick: () => {
+    state.overrides = undoBulk(state.overrides, b.undo.previous);
+    b.note = `Undone: ${b.undo.text}.`; b.undo = null;
+    recompute(); render(); markDirty();
+  } });
+  const bar = h('div', { class: 'code-bar', id: 'code-bar' }, h('div', { class: 'count', id: 'code-count' }), choose, apply,
+    h('button', { type: 'button', class: 'btn ghost', id: 'code-clear', text: 'Clear', onclick: () => { b.sel.clear(); b.last = null; renderCodingRows(); } }));
+  const head = h('table', { class: 'coding', id: 'code-table' },
+    h('thead', {}, h('tr', {},
+      h('th', { class: 'pick' }, h('input', { type: 'checkbox', id: 'code-all', 'aria-label': 'Select everything shown', onchange: e => {
+        const shown = currentCodingList().slice(0, b.limit).map(t => t.id);
+        for (const id of shown) { if (e.target.checked) b.sel.add(id); else b.sel.delete(id); }
+        renderCodingRows();
+      } })),
+      h('th', { text: 'Date' }), h('th', { text: 'Description' }), h('th', { class: 'num', text: 'Amount' }), h('th', { class: 'col-acct', text: 'From' }), h('th', { text: 'Now in' }))),
+    h('tbody', { id: 'code-rows' }));
+  fill(root,
+    h('div', { class: 'card-head' }, h('h2', { id: 'code-title', text: 'Code items' }),
+      h('div', { class: 'row-form' },
+        h('select', { id: 'code-view', 'aria-label': 'Show', onchange: e => { b.view = e.target.value; b.limit = 150; renderCoding(); } },
+          h('option', { value: 'review', text: `Needs review (${left})`, selected: b.view === 'review' }), h('option', { value: 'all', text: `Everything (${everything.length})`, selected: b.view === 'all' })),
+        h('select', { id: 'code-month', 'aria-label': 'Month', onchange: e => { b.ym = e.target.value; b.limit = 150; renderCoding(); } },
+          h('option', { value: '', text: 'All months' }), months.map(ym => h('option', { value: ym, text: fmtMonth(ym), selected: ym === b.ym }))))),
+    h('input', { type: 'search', id: 'code-q', placeholder: 'Search descriptions', 'aria-label': 'Search descriptions', value: b.q, oninput: e => { b.q = e.target.value; b.limit = 150; renderCodingRows(); } }),
+    h('p', { class: 'sub code-note', id: 'code-note', role: 'status' }),
+    undo && h('div', { class: 'row-form' }, undo),
+    bar,
+    h('div', { class: 'mx-wrap' }, head),
+    h('p', { class: 'note', text: 'Tick items, or tap “Same merchant” to tick every charge from it. Hold Shift to tick a range. Pick an account once and tap Apply.' }),
+    h('div', { id: 'code-more' }));
+  renderCodingRows();
+}
+const currentCodingList = () => filterItems(state.txs, state.bulk);
+
+function renderCodingRows() {
+  const b = state.bulk;
+  const list = currentCodingList();
+  const known = new Set(state.txs.map(t => t.id));
+  for (const id of [...b.sel]) if (!known.has(id)) b.sel.delete(id);
+  const shown = list.slice(0, b.limit), ids = shown.map(t => t.id);
+  const body = $('code-rows');
+  body.replaceChildren();
+  for (const t of shown) {
+    const on = b.sel.has(t.id);
+    const tr = body.insertRow();
+    tr.className = on ? 'sel' : '';
+    tr.insertCell().className = 'pick';
+    tr.cells[0].append(h('input', { type: 'checkbox', checked: on, 'aria-label': `Select ${t.description}, ${money2(t.cents)}`,
+      onclick: e => {
+        if (e.shiftKey && b.last) for (const id of rangeBetween(ids, b.last, t.id)) b.sel.add(id);
+        else if (e.target.checked) b.sel.add(t.id); else b.sel.delete(t.id);
+        b.last = t.id;
+        renderCodingRows();
+      } }));
+    tr.insertCell().textContent = fmtDate(t.date);
+    const d = tr.insertCell();
+    d.append(h('span', { class: 'merchant', text: t.description }),
+      h('button', { type: 'button', class: 'linkbtn similar', text: 'Same merchant', 'aria-label': `Select every charge like ${t.description}`,
+        onclick: () => { for (const id of similarTo(list, t.description)) b.sel.add(id); renderCodingRows(); } }));
+    const amt = tr.insertCell(); amt.className = 'num'; amt.textContent = money2(t.cents);
+    const from = tr.insertCell(); from.className = 'col-acct'; from.textContent = sourceLabel(t.account);
+    tr.insertCell().textContent = codeLabel(t.category);
+  }
+  if (!shown.length) { const r = body.insertRow(); const c = r.insertCell(); c.colSpan = 6; c.className = 'empty'; c.textContent = b.view === 'review' && !b.q && !b.ym ? 'Nothing left to review.' : 'Nothing matches.'; }
+  const picked = state.txs.filter(t => b.sel.has(t.id));
+  const total = picked.reduce((s, t) => s + t.cents, 0);
+  $('code-count').textContent = picked.length ? `${plural(picked.length, 'item', 'items')} selected · ${money2(total)}` : `${plural(list.length, 'item', 'items')} shown. Tick some to code them together.`;
+  $('code-bar').classList.toggle('on', picked.length > 0);
+  $('code-apply').disabled = !picked.length;
+  $('code-clear').disabled = !picked.length;
+  const all = $('code-all');
+  all.checked = ids.length > 0 && ids.every(id => b.sel.has(id));
+  all.indeterminate = !all.checked && ids.some(id => b.sel.has(id));
+  $('code-note').textContent = b.note;
+  fill($('code-more'), list.length > shown.length && h('button', { type: 'button', class: 'btn ghost', id: 'code-more-btn', text: `Show ${Math.min(150, list.length - shown.length)} more (${list.length - shown.length} left)`, onclick: () => { b.limit += 150; renderCodingRows(); } }));
 }
 
 function renderGlControls() {
@@ -1254,9 +1356,9 @@ function renderMatrix(asOf) {
 }
 
 // ---------- tabs and the main render ----------
-const TABS = ['summary', 'budget', 'investments', 'savings', 'fs', 'tie'];
-const TAB_LABELS = { summary: 'Summary', budget: 'Budget', investments: 'Investments', savings: 'Savings', fs: 'F/S', tie: 'Tie-out' };
-const NEEDS_DATA = new Set(['budget', 'fs', 'tie']); // the other tabs are placeholders for now
+const TABS = ['summary', 'budget', 'code', 'investments', 'savings', 'fs', 'tie'];
+const TAB_LABELS = { summary: 'Summary', budget: 'Budget', code: 'Coding', investments: 'Investments', savings: 'Savings', fs: 'F/S', tie: 'Tie-out' };
+const NEEDS_DATA = new Set(['budget', 'code', 'fs', 'tie']); // the other tabs are placeholders for now
 // The pages inside F/S, in the order you read them.
 const FS_PAGES = [['tb', 'TB Summary'], ['bs', 'Balance Sheet'], ['is', 'Income Statement'], ['gl', 'GL Detail']];
 
@@ -1275,6 +1377,7 @@ function setTab(tab) {
   state.tab = tab;
   if (!(tab === 'fs' && state.fsPage === 'gl')) state.returnTo = null;
   if (tab === 'fs' && state.fsPage === 'gl' && state.txs.length) renderLedger();
+  if (tab === 'code' && state.txs.length) { state.bulk.note = ''; renderCoding(); }
   if (tab === 'budget' && state.txs.length) renderBudget(asOfDate(state.txs), false);   // redraw the charts at this screen's width
   applyTab();
 }
@@ -1305,7 +1408,7 @@ function render() {
   $('app').hidden = state.locked;
   $('add-btn').hidden = state.locked || state.demo;
   if (state.locked) {
-    for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'fs-tb', 'fs-bs', 'fs-is', 'plan-body', 'chips', 'gl-controls', 'coverage']) $(id).replaceChildren();
+    for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'fs-tb', 'fs-bs', 'fs-is', 'plan-body', 'chips', 'gl-controls', 'coverage', 'code-body']) $(id).replaceChildren();
     $('out').querySelector('tbody').replaceChildren();
     $('gl-count').textContent = '';
     $('settings-body').replaceChildren();
@@ -1321,9 +1424,12 @@ function render() {
     $('asof').textContent = `Through ${fmtDate(asOf)}.` + (sample && !state.demo ? ' Using a sample plan until you set your own under Your plan.' : '');
     renderBudget(asOf, false);
     renderLedger();
+    renderCoding();
     renderFS(asOf);
     renderTie();
   }
+  const toCode = state.txs.filter(t => t.category === 'review').length;
+  $('tab-code').textContent = toCode ? `Coding · ${toCode}` : 'Coding';
   if (!document.activeElement?.closest('#plan-body')) renderPlan();   // don't rebuild the form while you type in it
   updatePlanSummary();
   applyTab();

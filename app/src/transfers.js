@@ -12,6 +12,7 @@
 
 const HINT = /payment|pymt|transfer|xfer|epayment|autopay|zelle|venmo|cash app|paypal|thank you/i;
 const MAX_DAYS = 5;
+const CASH_OUT = /^VENMO TRANSFER TO BANK/;
 
 const dayNumber = iso => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000);
 
@@ -25,6 +26,9 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS } = {}) {
   for (const o of outs) {
     for (const i of ins) {
       if (o.account === i.account || o.cents !== -i.cents) continue;
+      // A Venmo payment to or from a friend is not a transfer between your own accounts, even if a bank line has the same amount.
+      // Only a cash-out from the Venmo balance can be one half of a transfer.
+      if ((o.account === 'venmo' && !CASH_OUT.test(o.description)) || (i.account === 'venmo' && !CASH_OUT.test(i.description))) continue;
       const gap = Math.abs(dayNumber(o.date) - dayNumber(i.date));
       if (gap > maxDays) continue;
       candidates.push({ o, i, gap, hinted: HINT.test(o.description) || HINT.test(i.description) });

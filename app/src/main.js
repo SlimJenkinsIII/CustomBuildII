@@ -92,17 +92,18 @@ function recompute() {
 
 async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, external = 0;
   try {
     for (const file of files) {
       let parsed;
       try { parsed = parseStatement(await file.text()); }
       catch (err) { throw new Error(`${file.name}: ${err.message}`); }
       const r = mergeTransactions(state.raw, withIds(parsed.transactions));
-      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount;
+      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; external += parsed.notes?.external ?? 0;
     }
     $('status').textContent = `Added ${plural(added, 'transaction', 'transactions')}` +
-      (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.';
+      (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.' +
+      (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} left out: ${external === 1 ? 'it is' : 'they are'} already on that statement.` : '');
   } catch (err) {
     $('status').textContent = err.message;
   }

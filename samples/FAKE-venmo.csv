@@ -1,0 +1,13 @@
+Account Statement - (@fake-sample-user) ,,,,,,,,,,,,,,,,,,,,,
+Account Activity,,,,,,,,,,,,,,,,,,,,,
+,ID,Datetime,Type,Status,Note,From,To,Amount (total),Amount (tip),Amount (tax),Amount (fee),Tax Rate,Tax Exempt,Funding Source,Destination,Beginning Balance,Ending Balance,Statement Period Venmo Fees,Terminal Location,Year to Date Venmo Fees,Disclaimer
+,,,,,,,,,,,,,,,,$20.00,,,,,
+,1000000000000000001,2026-03-02T18:21:03,Payment,Complete,Dinner split,Pat Example,Fake User,+ $32.50,,,,0,,Venmo balance,,,,,Venmo,,
+,1000000000000000002,2026-03-04T12:05:44,Payment,Complete,Rent share,Fake User,Sam Sample,- $450.00,,,,0,,Venmo balance,,,,,Venmo,,
+,1000000000000000003,2026-03-05T20:11:10,Payment,Complete,Concert tickets,Fake User,Riley Demo,- $60.00,,,,0,,Sample Bank Checking,,,,,Venmo,,
+,1000000000000000004,2026-03-06T09:30:00,Charge,Complete,Utilities,Jordan Test,Fake User,+ $85.25,,,,0,,Venmo balance,,,,,Venmo,,
+,1000000000000000005,2026-03-08T15:02:19,Payment,Pending,Lunch,Fake User,Casey Mock,- $14.00,,,,0,,Venmo balance,,,,,Venmo,,
+,1000000000000000006,2026-03-09T11:45:00,Payment,Cancelled,Gift,Fake User,Morgan Fake,- $25.00,,,,0,,Venmo balance,,,,,Venmo,,
+,1000000000000000007,2026-03-10T07:00:00,Standard Transfer,Issued,,Fake User,,- $100.00,,,,0,,Venmo balance,Sample Bank Checking,,,,,Venmo,,
+,1000000000000000008,2026-03-11T19:20:30,Merchant Transaction,Complete,Coffee,Fake User,Corner Cafe,- $5.75,,,,0,,Venmo balance,,,,,Venmo,,
+,,,,,,,,,,,,,,,,,$1,000.75 ,,$0.00,,

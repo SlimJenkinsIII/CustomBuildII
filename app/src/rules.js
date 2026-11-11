@@ -9,6 +9,9 @@ import { CATEGORIES, SOURCE_ROLES } from './categories.js';
 // transfer (held in "transfers in transit" until it arrives) instead of cluttering Needs review.
 const PAYMENT_WORDS = /payment|pymt|pmt|epay|autopay|thank you/i;
 const CARD_WORDS = /\bcard\b|\bcrd\b|amex|american express|chase credit|credit card/i;
+// A cash-out from the Venmo balance to your bank is money moving between your own accounts, never spending.
+export const isVenmoCashOut = t => t.account === 'venmo' && /^VENMO TRANSFER TO BANK/.test(t.description);
+
 export function isCardPayment(t) {
   if (!PAYMENT_WORDS.test(t.description)) return false;
   if (SOURCE_ROLES[t.account] === 'liability') return t.cents > 0;                 // money coming in to a card, worded as a payment
@@ -80,9 +83,9 @@ export function categorize(transactions, {
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';
       why = savingsCat ? `transfer into ${other.account}` : 'matched transfer';
-    } else if (t.transfer === 'unmatched' && isCardPayment(t)) {
+    } else if (t.transfer === 'unmatched' && (isCardPayment(t) || isVenmoCashOut(t))) {
       category = 'transfer';
-      why = 'card payment (the other account isn’t imported yet)';
+      why = isVenmoCashOut(t) ? 'Venmo cash-out (the bank deposit isn’t imported yet)' : 'card payment (the other account isn’t imported yet)';
     } else {
       const rule = allRules.find(x => ruleMatches(x, t));
       if (rule) { category = rule.category; why = `rule: ${rule.contains}`; }

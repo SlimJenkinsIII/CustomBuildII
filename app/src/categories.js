@@ -109,6 +109,7 @@ export const SOURCE_ACCOUNTS = {
   'chase-checking': { code: '1000', name: 'Chase checking' },
   'chase-card': { code: '2000', name: 'Chase credit card' },
   amex: { code: '2010', name: 'Amex card' },
+  venmo: { code: '1030', name: 'Venmo balance' },
 };
 
 // Accounts that exist in the chart but no feature uses yet (they arrive with later phases).
@@ -122,7 +123,7 @@ export const SYSTEM_ACCOUNTS = [
 ];
 
 // Whether each statement account is something you have or something you owe.
-export const SOURCE_ROLES = { 'chase-checking': 'asset', 'chase-card': 'liability', amex: 'liability' };
+export const SOURCE_ROLES = { 'chase-checking': 'asset', 'chase-card': 'liability', amex: 'liability', venmo: 'asset' };
 
 const CLASSES = { 1: 'Assets', 2: 'Liabilities', 3: 'Equity', 4: 'Revenue', 5: 'Expenses', 6: 'Other income / loss', 7: 'Vacations' };
 export const classOf = code => CLASSES[code[0]];

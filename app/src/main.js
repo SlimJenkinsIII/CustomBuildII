@@ -3,7 +3,7 @@ import { withIds, mergeTransactions } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps } from './nesting.js';
-import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween } from './bulk.js';
+import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
@@ -26,7 +26,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, period: '4w', bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -75,7 +75,7 @@ function recompute() {
   applyParents(state.parents);
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.trips);
+  const auto = assignTrips(applyLearned(categorize(matchTransfers(state.raw), { userRules: customRules(state.customs) }), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -116,7 +116,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -130,13 +130,14 @@ function loadSnapshot(d) {
   state.parents = cleanParents(d.parents);
   applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
+  state.learned = cleanLearned(Object.fromEntries(Object.entries(d.learned ?? {}).map(([k, r]) => [k, r && { ...r, c: migrateCategory(r.c) }])), id => !!CATEGORIES[id]);
   state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -474,6 +475,7 @@ function openPicker(cell, t) {
   const select = h('select', { 'aria-label': `Category for ${t.description}`,
     onchange: e => {
       if (e.target.value === '__auto') delete state.overrides[t.id]; else state.overrides[t.id] = e.target.value;
+      if (CATEGORIES[e.target.value]?.group !== 'vacation') state.learned = learn(state.learned, [t], e.target.value).next;   // remember the merchant
       recompute(); render(); markDirty();
     },
     onblur: () => renderGlRows() },
@@ -494,16 +496,31 @@ function renderCoding() {
   const apply = h('button', { type: 'button', class: 'btn', id: 'code-apply', text: 'Apply', onclick: () => {
     const ids = [...b.sel].filter(id => state.txs.some(t => t.id === id));
     if (!ids.length || !choose.value) return;
+    const picked = state.txs.filter(t => ids.includes(t.id));
+    const before = new Map(state.txs.map(t => [t.id, t.category]));
     const out = applyBulk(state.overrides, ids, choose.value);
     state.overrides = out.next;
+    // Teach the app: charges from these merchants, past and future, now file the same way (vacation accounts follow trip dates instead).
+    const priorLearned = state.learned;
+    const taught = CATEGORIES[choose.value]?.group === 'vacation' ? { next: state.learned, remembered: [], skipped: [] } : learn(state.learned, picked, choose.value);
+    state.learned = taught.next;
     const label = choose.value === '__auto' ? 'the app’s own choice' : codeLabel(choose.value);
-    b.undo = { previous: out.previous, text: `${plural(ids.length, 'item', 'items')} coded as ${label}` };
-    b.note = `${plural(ids.length, 'item', 'items')} coded as ${label}.`;
+    recompute();
+    const alsoMoved = state.txs.filter(t => !ids.includes(t.id) && before.get(t.id) !== t.category).length;
+    const names = taught.remembered.slice(0, 3).join(', ') + (taught.remembered.length > 3 ? ` and ${taught.remembered.length - 3} more` : '');
+    const extra = [
+      choose.value === '__auto' ? (taught.next !== priorLearned && Object.keys(priorLearned).length !== Object.keys(taught.next).length ? 'I’ve forgotten those merchants.' : '')
+        : taught.remembered.length ? `I’ll file future ${names} charges there too${alsoMoved ? `, and I moved ${plural(alsoMoved, 'other one', 'other ones')}` : ''}.` : '',
+      taught.skipped.length ? `I didn’t remember ${taught.skipped.slice(0, 3).join(', ')}: that name covers many kinds of purchase.` : '',
+    ].filter(Boolean).join(' ');
+    b.undo = { previous: out.previous, learned: priorLearned, text: `${plural(ids.length, 'item', 'items')} coded as ${label}` };
+    b.note = `${plural(ids.length, 'item', 'items')} coded as ${label}. ${extra}`.trim();
     b.sel.clear(); b.last = null;
-    recompute(); render(); markDirty();
+    render(); markDirty();
   } });
   const undo = b.undo && h('button', { type: 'button', class: 'btn ghost', id: 'code-undo', text: 'Undo', onclick: () => {
     state.overrides = undoBulk(state.overrides, b.undo.previous);
+    state.learned = b.undo.learned;                                                  // and forget what that taught
     b.note = `Undone: ${b.undo.text}.`; b.undo = null;
     recompute(); render(); markDirty();
   } });
@@ -530,10 +547,23 @@ function renderCoding() {
     undo && h('div', { class: 'row-form' }, undo),
     bar,
     h('div', { class: 'mx-wrap' }, head),
-    h('p', { class: 'note', text: 'Tick items, or tap “Same merchant” to tick every charge from it. Hold Shift to tick a range. Pick an account once and tap Apply.' }),
-    h('div', { id: 'code-more' }));
+    h('p', { class: 'note', text: 'Tick items, or tap “Same merchant” to tick every charge from it. Hold Shift to tick a range. Pick an account once and tap Apply. The app remembers each merchant you code and files the rest the same way.' }),
+    h('div', { id: 'code-more' }),
+    learnedList());
   renderCodingRows();
 }
+// What the app has learned from you: each merchant and where it files. Forget one and it goes back to the app's own judgement.
+function learnedList() {
+  const entries = Object.entries(state.learned).filter(([, r]) => CATEGORIES[r.c]).sort((a, b) => a[0].localeCompare(b[0]));
+  return h('details', { class: 'fine', id: 'code-learned' },
+    h('summary', { text: `What I’ve learned (${entries.length})` }),
+    entries.length
+      ? h('div', { style: 'display:flex;flex-direction:column;gap:2px;padding-top:6px' }, entries.map(([key, r]) => h('div', { class: 'learned-row' },
+          h('span', { class: 'learned-key', text: key }), h('span', { class: 'learned-cat', text: `→ ${codeLabel(r.c)}` }),
+          h('button', { type: 'button', class: 'linkbtn', text: 'Forget', 'aria-label': `Forget ${key}`, onclick: () => { state.learned = forget(state.learned, key); recompute(); render(); markDirty(); const d = $('code-learned'); if (d) d.open = true; } }))))
+      : h('p', { class: 'note', text: 'Nothing yet. Code a charge and I’ll remember that merchant.' }));
+}
+
 const currentCodingList = () => filterItems(state.txs, state.bulk);
 
 function renderCodingRows() {

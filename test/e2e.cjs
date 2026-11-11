@@ -365,12 +365,6 @@ server.listen(0, async () => {
   await page.selectOption('#gl-cat', 'free_groceries');
   check('GL account filter works', (await page.locator('#out tbody tr').count()) > 0 && (await page.locator('#out tbody tr').allInnerTexts()).every(t => t.includes('5455 Groceries')));
   await page.click('text=Clear all filters');
-  const mag = glRow('MAGNOLIA CAFE');
-  check('unknown merchant starts in review', (await mag.innerText()).includes('1900'));
-  await mag.locator('.linkbtn').click();
-  await mag.locator('select').selectOption('free_restaurants');
-  check('category choice applied', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
-
   // ---------- the Coding tab: many items at once ----------
   await page.click('#tab-code');
   const toReview = await page.locator('#code-rows tr .merchant').count();
@@ -391,7 +385,44 @@ server.listen(0, async () => {
   await page.click('#code-undo');
   await page.waitForFunction(() => /Undone/.test(document.getElementById('code-note').textContent));
   check('Undo puts every item back as it was', (await page.locator('#code-rows tr .merchant').count()) === toReview);
+
+  // automatic learning: code ONE charge and the app remembers the merchant, moving the others and filing future ones
+  const venmoRow = page.locator('#code-rows tr', { hasText: 'VENMO' }).first();
+  if (await venmoRow.count()) {
+    await venmoRow.locator('input[type=checkbox]').check();
+    await page.selectOption('#code-choose', 'free_other');
+    await page.click('#code-apply');
+    await page.waitForFunction(() => /coded as/.test(document.getElementById('code-note').textContent));
+    check('a name that covers many kinds of purchase is not remembered, and it says so', /didn.t remember VENMO/.test(await page.textContent('#code-note')) && !/I.ll file future/.test(await page.textContent('#code-note')));
+    await page.click('#code-undo');
+    await page.waitForFunction(() => /Undone/.test(document.getElementById('code-note').textContent));
+  }
+  const magRow = page.locator('#code-rows tr', { hasText: 'MAGNOLIA CAFE' });
+  const magCount = await magRow.count();
+  if (magCount >= 2) {
+    await magRow.first().locator('input[type=checkbox]').check();
+    await page.selectOption('#code-choose', 'free_restaurants');
+    await page.click('#code-apply');
+    await page.waitForFunction(() => /coded as/.test(document.getElementById('code-note').textContent));
+    const note = await page.textContent('#code-note');
+    check('coding one charge tells you it will remember the merchant, and moves the others', /1 item coded as 5400 Restaurants/.test(note) && /I.ll file future MAGNOLIA CAFE charges there too/.test(note) && /moved \d+ other one/.test(note), note);
+    check('the other charge from that merchant left the review list too', (await page.locator('#code-rows tr', { hasText: 'MAGNOLIA CAFE' }).count()) === 0);
+    await page.click('#code-learned summary');
+    check('what was learned is listed, so you can see and undo it', /MAGNOLIA CAFE/.test(await page.textContent('#code-learned')) && /5400 Restaurants/.test(await page.textContent('#code-learned')));
+    await page.click('#code-learned button:has-text("Forget")');
+    check('forgetting a merchant sends only the charge you did not code yourself back to review', (await page.locator('#code-rows tr', { hasText: 'MAGNOLIA CAFE' }).count()) === magCount - 1);
+    await page.click('#code-undo');
+    await page.waitForFunction(() => /Undone/.test(document.getElementById('code-note').textContent));
+    check('Undo also forgets what that taught', (await page.locator('#code-rows tr', { hasText: 'MAGNOLIA CAFE' }).count()) === magCount);
+  } else check('the sample data has two charges from one unknown merchant to learn from', false, String(magCount));
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  const mag = glRow('MAGNOLIA CAFE');
+  check('unknown merchant starts in review', (await mag.innerText()).includes('1900'));
+  await mag.locator('.linkbtn').click();
+  await mag.locator('select').selectOption('free_restaurants');
+  check('category choice applied', (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
+  check('changing one charge in GL Detail teaches the app too: the merchant\'s other charges follow', (await page.locator('#out tbody tr', { hasText: 'MAGNOLIA CAFE' }).allInnerTexts()).every(t => t.includes('5400 Restaurants')));
+
 
 
   // ---------- drill down from Budget and come back ----------

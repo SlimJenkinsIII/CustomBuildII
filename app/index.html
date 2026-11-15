@@ -275,6 +275,11 @@
     .twisty { font: inherit; font-size: 13px; line-height: 1; padding: 2px 6px 2px 0; margin: 0; border: 0; background: none; color: var(--ink-2); cursor: pointer; min-width: 22px; text-align: left; }
     .fs-expand { display: inline-flex; gap: 10px; font-size: 13px; align-items: center; }
     .fs-expand .linkbtn { font-size: 13px; }
+    .acct-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px; gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    .acct-row input.name { width: 100%; box-sizing: border-box; font-weight: 600; }
+    .acct-row input.last4 { width: 84px; text-align: center; box-sizing: border-box; }
+    .acct-row .acct-meta { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
+    #acct-paste { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
     .code-note { margin: 6px 0; font-size: 14px; }
     .code-note:empty { display: none; }
     #code-q { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 9px 14px; margin-top: 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
@@ -434,6 +439,7 @@
       </div>
     </header>
     <p class="note" id="status" role="status"></p>
+    <button class="linkbtn" type="button" id="undo-import" hidden>Undo this import</button>
     <div class="notice" id="hostnote" hidden><span><b>Test address.</b> Use made-up data only here, such as the Dummy numbers switch in Settings or the files on the <a href="test-files.html">test files page</a>. Real statements belong on your own domain, once it is set up.</span></div>
 
     <section class="card" id="lock" hidden aria-labelledby="lock-title">

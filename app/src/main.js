@@ -1,15 +1,16 @@
 import { parseStatement, toCents } from './parsers.js';
-import { withIds, mergeTransactions } from './ledger.js';
+import { withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
 import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
+import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, addAccountOfFamily } from './accounts.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -29,7 +30,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, open: (() => { try { return new Set(JSON.parse(localStorage.getItem('my-budget-open') ?? '[]')); } catch { return new Set(); } })(), period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -70,6 +71,7 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter(Boole
 
 // ---------- data ----------
 function recompute() {
+  applyAccountList(state.accounts);
   applyCustoms(state.customs);
   applyNames(state.names);
   state.removed = cleanRemoved(state.removed);
@@ -94,29 +96,101 @@ function recompute() {
   if (!years.includes(state.year)) state.year = years[years.length - 1] ?? null;
 }
 
+// A file names its account by the last four digits. When the name settles it, nothing is asked; when it can't (digits you haven't set
+// up, or several accounts of one kind), a small window asks once, and what you answer is remembered for next time.
+function askAccount({ fileName, family, digits }) {
+  return new Promise(resolve => {
+    const options = accountKeysOfFamily(family);
+    const pick = h('select', { id: 'ask-account', 'aria-label': 'Account' },
+      options.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].name}${last4Of(k) ? ` (${last4Of(k)})` : ''}` })),
+      h('option', { value: '__new', text: 'A new account…' }));
+    const nm = h('input', { id: 'ask-name', type: 'text', maxlength: '60', placeholder: 'Name, like Chase Savings', 'aria-label': 'Name of the new account' });
+    const l4 = h('input', { id: 'ask-last4', type: 'text', inputmode: 'numeric', maxlength: '4', value: digits[0] ?? '', placeholder: 'Last 4 digits', 'aria-label': 'Last 4 digits' });
+    const fields = h('div', { class: 'row-form', hidden: true }, nm, l4);
+    pick.addEventListener('change', () => { fields.hidden = pick.value !== '__new'; });
+    const msg = h('p', { class: 'msg', role: 'status' });
+    const done = value => { overlay.remove(); resolve(value); };
+    const overlay = h('div', { class: 'overlay', id: 'ask-overlay' }, h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
+      h('h2', { id: 'ask-title', text: 'Which account is this file?' }),
+      h('p', { class: 'sub', text: `${fileName} looks like a ${FAMILIES[family].toLowerCase()} statement.${digits.length ? ` Its name has ${digits.join(' and ')} in it, which isn't one of your accounts yet.` : ''} Pick the account it belongs to and I'll remember it.` }),
+      pick, fields, msg,
+      h('div', { class: 'row-form' },
+        h('button', { type: 'button', class: 'btn', id: 'ask-ok', text: 'Use this account', onclick: () => {
+          try {
+            if (pick.value === '__new') {
+              const out = addAccountOfFamily(state.accounts, { name: nm.value, family, last4: l4.value }, state.coding);
+              done({ accounts: out.accounts, key: out.key });
+            } else {
+              const keep = digits.find(d => !last4Of(pick.value) && !state.accounts.some(a => a.last4 === d));   // remember the digits for this account
+              done({ accounts: keep ? setLast4(state.accounts, pick.value, keep) : state.accounts, key: pick.value });
+            }
+          } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+        } }),
+        h('button', { type: 'button', class: 'btn ghost', id: 'ask-skip', text: 'Skip this file', onclick: () => done(null) }))));
+    document.body.append(overlay);
+    pick.focus();
+  });
+}
+
+// Which of your accounts a file belongs to: by its digits, else the only account of that kind, else ask.
+async function accountForUpload(file, format) {
+  const family = familyForFormat(format);
+  const named = accountForFile(file.name);
+  if (named) {
+    if (familyOf(named) !== family) throw new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which is a different kind of account than this file.`);
+    return { key: named };
+  }
+  const options = accountKeysOfFamily(family);
+  const digits = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));              // years in a name are not account digits
+  if (options.length === 1 && (family === 'venmo' || !digits.length)) return { key: options[0] };
+  const answer = await askAccount({ fileName: file.name, family, digits });
+  return answer ? { key: answer.key, accounts: answer.accounts } : null;
+}
+
+let lastImport = null;                                    // memory only: lets you take back the last import
 async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
-  let added = 0, skipped = 0, external = 0, details = [];
+  let added = 0, moved = 0, skipped = 0, external = 0, details = [];
+  const left = [], movedInto = new Set();
+  const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts };
   try {
     for (const file of files) {
+      const text = await file.text();
       let parsed;
-      try { parsed = parseStatement(await file.text()); }
+      try { parsed = parseStatement(text); }
       catch (err) { throw new Error(`${file.name}: ${err.message}`); }
-      const r = mergeTransactions(state.raw, withIds(parsed.transactions));
-      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; external += parsed.notes?.external ?? 0; details = details.concat(parsed.notes?.details ?? []);
+      const where = await accountForUpload(file, parsed.format);
+      if (!where) { left.push(file.name); continue; }
+      if (where.accounts) { state.accounts = where.accounts; recompute(); }
+      parsed = parseStatement(text, where.key);
+      const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyOf(where.key)]);
+      state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; moved += r.movedCount;
+      if (r.movedCount) movedInto.add(SOURCE_ACCOUNTS[where.key].name);
+      external += parsed.notes?.external ?? 0; details = details.concat(parsed.notes?.details ?? []);
     }
     state.venmoDetail = mergeDetails(state.venmoDetail, details);
     $('status').textContent = `Added ${plural(added, 'transaction', 'transactions')}` +
+      (moved ? `, moved ${plural(moved, 'one', 'ones')} you already had into ${[...movedInto].join(' and ')} (your choices on them are kept)` : '') +
       (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.' +
+      (left.length ? ` Skipped ${left.join(', ')}.` : '') +
       (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} not counted again (${external === 1 ? 'it is' : 'they are'} already on that statement); I used ${external === 1 ? 'it' : 'them'} to say who you paid and why.` : '');
   } catch (err) {
     $('status').textContent = err.message;
   }
+  lastImport = (added || moved || details.length) ? before : null;
+  $('undo-import').hidden = !lastImport;
   resetGl();
   recompute();
   render();
-  if (added || details.length) markDirty();
+  if (added || moved || details.length || state.accounts !== before.accounts) markDirty();
 }
+$('undo-import').addEventListener('click', () => {
+  if (!lastImport) return;
+  state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts;
+  lastImport = null; $('undo-import').hidden = true;
+  $('status').textContent = 'Import undone.';
+  resetGl(); recompute(); render(); markDirty();
+});
 $('file').addEventListener('change', e => {
   const files = [...e.target.files];
   e.target.value = '';
@@ -124,12 +198,14 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
   state.overrides = d.overrides && typeof d.overrides === 'object' ? d.overrides : {};
   state.trips = Array.isArray(d.trips) ? d.trips : [];
+  state.accounts = cleanAccounts(d.accounts);
+  applyAccountList(state.accounts);
   state.customs = cleanCustoms(d.customs);
   applyCustoms(state.customs);
   state.names = cleanNames(d.names);
@@ -147,7 +223,7 @@ function loadSnapshot(d) {
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1718,7 +1794,7 @@ async function toggleDemo() {
 }
 
 // ---------- settings: a small sheet behind the gear ----------
-const SETTINGS_TITLES = { home: 'Settings', opening: 'Opening balances', coding: 'TB coding', trips: 'Trips', saving: 'Saving & backup', sync: 'Sync' };
+const SETTINGS_TITLES = { home: 'Settings', opening: 'Opening balances', accounts: 'Accounts', coding: 'TB coding', trips: 'Trips', saving: 'Saving & backup', sync: 'Sync' };
 
 function openSettings(screen = 'home') {
   state.settingsScreen = screen;
@@ -1745,7 +1821,7 @@ function renderSettingsScreen() {
   $('settings-back').hidden = screen === 'home';
   const body = $('settings-body');
   body.replaceChildren();
-  ({ home: renderHomeScreen, opening: renderOpeningScreen, coding: renderCodingScreen, trips: renderTripsScreen, saving: renderSavingScreen, sync: renderSyncScreen })[screen](body);
+  ({ home: renderHomeScreen, opening: renderOpeningScreen, accounts: renderAccountsScreen, coding: renderCodingScreen, trips: renderTripsScreen, saving: renderSavingScreen, sync: renderSyncScreen })[screen](body);
 }
 
 function renderHomeScreen(body) {
@@ -1757,6 +1833,7 @@ function renderHomeScreen(body) {
     go('Opening balances', `Where each account stood on ${fmtFull(state.opening.date)}`, 'opening'),
     go('TB coding', 'Map each account to your TB numbers', 'coding'),
     go('Trips', 'Vacation blocks, 7100 to 7900', 'trips'),
+    go('Accounts', 'Link each statement file to its account', 'accounts'),
     go('Saving & backup', 'Passphrase, encrypted backup, restore', 'saving'),
     go('Sync', state.sync ? (syncStatus.at ? 'On · your devices are in step' : 'On') : 'Keep your iPad and phone in step', 'sync'),
     h('div', { class: 'menu-row' },
@@ -1832,6 +1909,62 @@ function renderSyncScreen(body) {
       h('p', { class: 'note', text: 'Stopping keeps the copy on the server and your other devices keep syncing. Deleting removes the server copy for every device; each keeps its own data.' }));
   }
   body.append(...kids, msg);
+}
+
+// ---------- accounts: which file belongs to which bank, card or wallet ----------
+function renderAccountsScreen(body) {
+  const msg = h('p', { class: 'msg', id: 'acct-msg', role: 'status' });
+  const refresh = (text, bad = false) => {
+    recompute(); render(); markDirty(); renderSettingsScreen();
+    const m = document.querySelector('#settings-body .msg'); if (m && text) { m.className = bad ? 'msg error' : 'msg'; m.textContent = text; }
+  };
+  const countOf = key => state.txs.filter(t => t.account === key).length;
+  const paste = h('textarea', { id: 'acct-paste', rows: '6', 'aria-label': 'Your accounts, one per line', placeholder: 'Chase Checking (1044)\nChase Savings (8527)\nChase Credit Card (6426)\nAmex Credit Card (1000)' });
+  const addAll = () => {
+    try {
+      const out = addFromList(state.accounts, paste.value, state.coding);
+      state.accounts = out.accounts;
+      for (const [k, v] of Object.entries(out.renames)) state.names = { ...state.names, [k]: v };
+      const r = out.report;
+      const parts = [
+        r.claimed.length && `Linked ${plural(r.claimed.length, 'account', 'accounts')} to the ones already there (everything imported stays with them).`,
+        r.created.length && `Added ${r.created.join(', ')}.`,
+        r.skipped.length && `Already set up: ${r.skipped.join(', ')}.`,
+        r.unsupported.length && `No file import for these yet, so I left them alone: ${r.unsupported.join(', ')}.`,
+      ].filter(Boolean);
+      refresh(parts.join(' ') || 'Nothing to add.');
+    } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+  };
+  const row = key => {
+    const a = SOURCE_ACCOUNTS[key], n = countOf(key);
+    return h('div', { class: 'acct-row' },
+      h('input', { id: `acctname-${key}`, type: 'text', maxlength: '60', value: a.name, class: 'name', 'aria-label': `Name of account ${a.code}`,
+        onchange: e => { try { state.names = setName(state.names, `src:${key}`, e.target.value); refresh(); } catch (err) { e.target.value = a.name; msg.className = 'msg error'; msg.textContent = err.message; } } }),
+      h('input', { id: `acctdig-${key}`, type: 'text', inputmode: 'numeric', maxlength: '4', value: last4Of(key), placeholder: 'Last 4', class: 'last4', 'aria-label': `Last 4 digits of ${a.name}`,
+        onchange: e => { try { state.accounts = setLast4(state.accounts, key, e.target.value); refresh(); } catch (err) { e.target.value = last4Of(key); msg.className = 'msg error'; msg.textContent = err.message; } } }),
+      h('span', { class: 'acct-meta', text: `${a.code} · ${FAMILIES[familyOf(key)]?.split(' (')[0] ?? ''} · ${plural(n, 'item', 'items')}` }),
+      isCustomSource(key) && n === 0 && twoStep('Remove', 'Tap again', () => { state.accounts = state.accounts.filter(x => x.key !== key); refresh(); }, 'btn ghost danger small'));
+  };
+  const one = (() => {
+    const nm = h('input', { id: 'acct-new-name', type: 'text', maxlength: '60', placeholder: 'Name', 'aria-label': 'Name of the account' });
+    const kind = h('select', { id: 'acct-new-kind', 'aria-label': 'Kind of account' }, Object.entries(FAMILIES).map(([k, label]) => h('option', { value: k, text: label })));
+    const dg = h('input', { id: 'acct-new-last4', type: 'text', inputmode: 'numeric', maxlength: '4', placeholder: 'Last 4', 'aria-label': 'Last 4 digits' });
+    return h('div', { class: 'row-form' }, nm, kind, dg, h('button', { type: 'button', class: 'btn', id: 'acct-new-add', text: 'Add', onclick: () => {
+      try { state.accounts = addAccountOfFamily(state.accounts, { name: nm.value, family: kind.value, last4: dg.value }, state.coding).accounts; refresh(`Added ${nm.value.trim()}.`); }
+      catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    } }));
+  })();
+  body.append(
+    h('p', { class: 'sub', text: 'Each statement file is matched to an account by the last four digits in its name, like Chase1044_Activity.CSV. Set the digits once and every upload goes to the right account. If a file’s digits aren’t set up, I’ll ask you once.' }),
+    h('h3', { class: 'set-h', text: 'Your accounts' }),
+    h('div', { id: 'acct-list' }, Object.keys(SOURCE_ACCOUNTS).sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(row)),
+    h('details', { class: 'fine', id: 'acct-paste-box', open: !state.accounts.some(a => a.last4) },
+      h('summary', { text: 'Paste a list of accounts' }),
+      h('div', { class: 'stack', style: 'margin-top:8px' },
+        h('p', { class: 'note', text: 'One per line, with the last four digits in brackets. I work out the kind from the words. The first checking account, card and so on takes over the one already here, so nothing already imported is lost; the rest are added.' }),
+        paste, h('button', { type: 'button', class: 'btn', id: 'acct-paste-go', text: 'Set up these accounts', onclick: addAll }))),
+    h('details', { class: 'fine' }, h('summary', { text: 'Add one account' }), h('div', { class: 'stack', style: 'margin-top:8px' }, one)),
+    msg);
 }
 
 function renderOpeningScreen(body) {

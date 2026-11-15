@@ -125,6 +125,37 @@ export const SYSTEM_ACCOUNTS = [
 // Whether each statement account is something you have or something you owe.
 export const SOURCE_ROLES = { 'chase-checking': 'asset', 'chase-card': 'liability', amex: 'liability', venmo: 'asset' };
 
+// ---------- your accounts: one for each bank, card or wallet, each linked to the files that belong to it ----------
+// The four below always exist. You add more (a second savings account, a second card) and give each its last four digits, so a
+// file with those digits in its name is recognised. What kind of file an account takes is its "family".
+export const FAMILIES = { 'chase-bank': 'Chase bank account (checking or savings)', 'chase-card': 'Chase credit card (including Southwest)', amex: 'Amex card', venmo: 'Venmo' };
+export const BUILTIN_SOURCES = ['chase-checking', 'chase-card', 'amex', 'venmo'];
+export const DEFAULT_OF_FAMILY = { 'chase-bank': 'chase-checking', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' };
+const FAMILY_OF = { 'chase-checking': 'chase-bank', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' };
+const LAST4 = {};
+export const familyOf = key => FAMILY_OF[key];
+export const last4Of = key => LAST4[key] ?? '';
+export const familyForFormat = format => ({ 'chase-checking': 'chase-bank', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' })[format];
+export const accountKeysOfFamily = family => Object.keys(SOURCE_ACCOUNTS).filter(k => FAMILY_OF[k] === family);
+export const roleOfFamily = family => (family === 'chase-card' || family === 'amex' ? 'liability' : 'asset');
+export const isCustomSource = key => !!SOURCE_ACCOUNTS[key]?.custom;
+// Puts your list of accounts into effect everywhere the app reads the account list.
+export function applyAccountList(accounts = []) {
+  for (const k of Object.keys(SOURCE_ACCOUNTS)) {
+    if (!SOURCE_ACCOUNTS[k].custom) continue;
+    delete SOURCE_ACCOUNTS[k]; delete SOURCE_ROLES[k]; delete FAMILY_OF[k];
+    delete DEFAULT_SOURCE_CODES[`src:${k}`]; delete DEFAULT_NAMES[`src:${k}`];
+  }
+  for (const k of Object.keys(LAST4)) delete LAST4[k];
+  for (const a of accounts) {
+    if (a.last4) LAST4[a.key] = a.last4;
+    if (BUILTIN_SOURCES.includes(a.key)) continue;
+    SOURCE_ACCOUNTS[a.key] = { code: a.code, name: a.name, custom: true };
+    SOURCE_ROLES[a.key] = a.role; FAMILY_OF[a.key] = a.family;
+    DEFAULT_SOURCE_CODES[`src:${a.key}`] = a.code; DEFAULT_NAMES[`src:${a.key}`] = a.name;
+  }
+}
+
 const CLASSES = { 1: 'Assets', 2: 'Liabilities', 3: 'Equity', 4: 'Revenue', 5: 'Expenses', 6: 'Other income / loss', 7: 'Vacations' };
 export const classOf = code => CLASSES[code[0]];
 
@@ -407,7 +438,7 @@ export function nextHundred(cls, used) {
   throw new Error('That section has no free standard numbers left.');
 }
 
-const usedCodes = (coding, except = []) => new Set(accountsWith(coding).filter(a => !except.includes(a.key)).map(a => a.code));
+export const usedCodes = (coding, except = []) => new Set(accountsWith(coding).filter(a => !except.includes(a.key)).map(a => a.code));
 
 // Adds a top-level account of a kind you choose. It takes the next free hundred in its section.
 export function addAccount(customs, coding, kind, name, match = '', { number = '', section = '' } = {}) {

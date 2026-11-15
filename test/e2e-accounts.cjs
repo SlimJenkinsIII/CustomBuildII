@@ -107,6 +107,32 @@ server.listen(0, async () => {
   const bs = await page.locator('#fs-bs').textContent();
   check('the Balance Sheet shows each account on its own', ['Chase Checkings (1044)', 'Chase Savings (8527)', 'Chase Savings (1899)'].every(n => bs.includes(n)));
 
+  // Venmo: one account of its own kind, so its file needs no question; and it can be set to sit under Checking
+  await page.setInputFiles('#file', [path.join(ROOT, 'samples', 'FAKE-venmo.csv')]);
+  await page.waitForFunction(() => /Went into: Venmo balance \(5\)/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('a Venmo file goes to the Venmo account without asking, and the message says so', (await page.locator('#ask-overlay').count()) === 0 && /Went into: Venmo balance \(5\)/.test(await status()), await status());
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'TB coding' }).click();
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Checking'); await page.selectOption('#acct-kind', 'header');
+  await page.click('#settings-body .sub-add button:text-is("Add")');
+  const head = (await page.textContent('#settings-body')).match(/Added (\d{4}) Checking/)[1];
+  await page.click('#settings-back');
+  await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  check('the Accounts screen shows how many items each account has, Venmo included', /Venmo balance|1030/.test(await page.textContent('#acct-list')) && /5 items/.test(await page.textContent('#acct-list')));
+  await page.selectOption('#acctunder-venmo', { label: `${head} Checking` });
+  await page.waitForFunction(() => /Venmo balance now sits under Checking/.test(document.getElementById('settings-body').textContent));
+  const vcode = (await page.textContent('#acct-list')).match(/(\d{4}) · Venmo/)[1];
+  check('Venmo now sits under Checking, and its number follows (the next ten under it)', Number(vcode) > Number(head) && Number(vcode) < Number(head) + 100 && vcode.endsWith('0'), `${head} -> ${vcode}`);
+  await page.click('#settings-close');
+  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
+  await page.click('#fs-bs .expand-all');
+  check('on the Balance Sheet, Venmo is indented under Checking', (await page.locator('#fs-bs tr:has-text("Venmo balance") td.acct.sub-acct').count()) === 1);
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  await page.selectOption('#acctunder-venmo', '');
+  await page.waitForFunction(() => /Venmo balance now sits on its own/.test(document.getElementById('settings-body').textContent));
+  check('and it can be put back on its own', true);
+  await page.click('#settings-close');
+
   // undo takes the last import back
   await page.setInputFiles('#file', [write('Chase8527_Activity_20260301.CSV', HEAD + line('03/05/2026', 'LOYALTY REWARD', 9.99))]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });

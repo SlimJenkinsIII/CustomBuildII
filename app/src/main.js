@@ -10,7 +10,7 @@ import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -151,7 +151,7 @@ let lastImport = null;                                    // memory only: lets y
 async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
   let added = 0, moved = 0, skipped = 0, external = 0, details = [];
-  const left = [], movedInto = new Set();
+  const left = [], movedInto = new Set(), wentInto = new Map();
   const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts };
   try {
     for (const file of files) {
@@ -166,12 +166,14 @@ async function importFiles(files) {
       const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyOf(where.key)]);
       state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; moved += r.movedCount;
       if (r.movedCount) movedInto.add(SOURCE_ACCOUNTS[where.key].name);
+      wentInto.set(SOURCE_ACCOUNTS[where.key].name, (wentInto.get(SOURCE_ACCOUNTS[where.key].name) ?? 0) + r.addedCount + r.movedCount);
       external += parsed.notes?.external ?? 0; details = details.concat(parsed.notes?.details ?? []);
     }
     state.venmoDetail = mergeDetails(state.venmoDetail, details);
     $('status').textContent = `Added ${plural(added, 'transaction', 'transactions')}` +
       (moved ? `, moved ${plural(moved, 'one', 'ones')} you already had into ${[...movedInto].join(' and ')} (your choices on them are kept)` : '') +
       (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.' +
+      (wentInto.size ? ` Went into: ${[...wentInto].map(([n, c]) => `${n} (${c})`).join(', ')}.` : '') +
       (left.length ? ` Skipped ${left.join(', ')}.` : '') +
       (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} not counted again (${external === 1 ? 'it is' : 'they are'} already on that statement); I used ${external === 1 ? 'it' : 'them'} to say who you paid and why.` : '');
   } catch (err) {
@@ -1935,6 +1937,24 @@ function renderAccountsScreen(body) {
       refresh(parts.join(' ') || 'Nothing to add.');
     } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
   };
+  // Where an account sits: under a main account like Checking, or on its own. It is the same as dragging it in TB coding,
+  // and its number follows (under 1000 it becomes 1010, 1020 ...).
+  const under = key => {
+    const code = SOURCE_ACCOUNTS[key].code;
+    const mains = codingList(state.trips, state.coding, state.names).filter(r => r.droppable && r.key !== `src:${key}` && r.code[0] === code[0]);
+    const here = parentOf(`src:${key}`) ?? '';
+    return h('label', { class: 'acct-under' }, h('span', { text: 'Sits under' }),
+      h('select', { id: `acctunder-${key}`, 'aria-label': `Where ${SOURCE_ACCOUNTS[key].name} sits`, onchange: e => {
+        try {
+          const out = moveAccount({ coding: state.coding, parents: state.parents, customs: state.customs }, `src:${key}`, e.target.value || 'top');
+          state.coding = out.coding; state.parents = out.parents; state.customs = out.customs;
+          const to = e.target.value ? `under ${mains.find(m => m.key === e.target.value)?.name ?? 'that account'}` : 'on its own';
+          refresh(`${SOURCE_ACCOUNTS[key].name} now sits ${to}.`);
+        } catch (err) { e.target.value = here; msg.className = 'msg error'; msg.textContent = err.message; }
+      } },
+        h('option', { value: '', text: 'On its own', selected: !here }),
+        mains.map(m => h('option', { value: m.key, text: `${m.code} ${m.name}`, selected: m.key === here }))));
+  };
   const row = key => {
     const a = SOURCE_ACCOUNTS[key], n = countOf(key);
     return h('div', { class: 'acct-row' },
@@ -1943,6 +1963,7 @@ function renderAccountsScreen(body) {
       h('input', { id: `acctdig-${key}`, type: 'text', inputmode: 'numeric', maxlength: '4', value: last4Of(key), placeholder: 'Last 4', class: 'last4', 'aria-label': `Last 4 digits of ${a.name}`,
         onchange: e => { try { state.accounts = setLast4(state.accounts, key, e.target.value); refresh(); } catch (err) { e.target.value = last4Of(key); msg.className = 'msg error'; msg.textContent = err.message; } } }),
       h('span', { class: 'acct-meta', text: `${a.code} · ${FAMILIES[familyOf(key)]?.split(' (')[0] ?? ''} · ${plural(n, 'item', 'items')}` }),
+      under(key),
       isCustomSource(key) && n === 0 && twoStep('Remove', 'Tap again', () => { state.accounts = state.accounts.filter(x => x.key !== key); refresh(); }, 'btn ghost danger small'));
   };
   const one = (() => {

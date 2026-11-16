@@ -7,7 +7,7 @@
 //   a move into savings debited to that savings account, anything unclassified to suspense).
 // A payment between two of your own accounts is one entry between the two. If its two halves land in
 // different months, "transfers in transit" holds the difference so every month still balances.
-import { CATEGORIES, SOURCE_ACCOUNTS, SOURCE_ROLES, SYSTEM_ACCOUNTS, classOf } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, SOURCE_ROLES, SYSTEM_ACCOUNTS, classOf, isRemoved } from './categories.js';
 import { monthOf, daysInMonth, plannedFreeCash } from './budget.js';
 
 const SUSPENSE = 'review';
@@ -72,7 +72,7 @@ export const DEFAULT_OPENING_DATE = '2024-12-31';
 // statement: what you have in an asset account, what you owe on a card.
 export function openingAccounts() {
   const sources = Object.keys(SOURCE_ACCOUNTS).map(a => ({ key: `src:${a}`, side: SOURCE_ROLES[a] ?? 'asset' }));
-  const savings = Object.values(CATEGORIES).filter(c => c.group === 'savings').sort((a, b) => a.code.localeCompare(b.code))
+  const savings = Object.values(CATEGORIES).filter(c => c.group === 'savings' && !isRemoved(c.id)).sort((a, b) => a.code.localeCompare(b.code))
     .map(c => ({ key: c.id, side: 'asset' }));
   return [...sources.filter(a => a.side === 'asset'), ...savings, ...sources.filter(a => a.side === 'liability')]
     .map(a => ({ ...a, ...accountInfo(a.key) }));
@@ -233,7 +233,7 @@ export function tieOut(txs, plan, period, asOf = '', opening = NO_OPENING) {
     review: neg(get(net, SUSPENSE)),
   };
   const netIncome = Object.values(effect).reduce((a, b) => a + b, 0);
-  const savingsKeys = Object.values(CATEGORIES).filter(c => c.group === 'savings' && (net.has(c.id))).map(c => c.id);
+  const savingsKeys = Object.values(CATEGORIES).filter(c => c.group === 'savings' && !isRemoved(c.id) && (net.has(c.id))).map(c => c.id);
   const savings = savingsKeys.map(id => ({
     id, name: CATEGORIES[id].name, code: CATEGORIES[id].code,
     movedIn: get(debit, id), pulledOut: get(credit, id), net: get(net, id),

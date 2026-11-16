@@ -302,7 +302,8 @@ export function cleanRemoved(raw) {
   return out;
 }
 const resolveWith = (map, id) => { for (let i = 0; i < 20 && id in map; i++) id = map[id]; return id; };
-export function applyRemoved(removed = {}) { REMOVED = { ...removed }; }
+// `merged` = hand-made accounts matched up with a statement account: they are retired, and what was filed under them goes to Transfers.
+export function applyRemoved(removed = {}, merged = {}) { REMOVED = { ...removed, ...Object.fromEntries(Object.keys(merged).map(id => [id, 'transfer'])) }; }
 export const removedList = () => Object.entries(REMOVED).map(([id, to]) => ({ key: id, code: DEFAULT_CODES[id], name: CATEGORIES[id]?.name, into: resolveCategory(id) }))
   .filter(r => CATEGORIES[r.key]).sort((a, b) => a.code.localeCompare(b.code));
 

@@ -133,6 +133,28 @@ server.listen(0, async () => {
   check('and it can be put back on its own', true);
   await page.click('#settings-close');
 
+  // the accounts made by hand on the TB are the same as the statement accounts: match them up, keeping the hand-made number and name
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'TB coding' }).click();
+  await page.click('#new-account');
+  await page.fill('#acct-name', 'Venmo cash'); await page.selectOption('#acct-kind', 'savings');
+  await page.click('#settings-body .sub-add button:text-is("Add")');
+  const mine = (await page.textContent('#settings-body')).match(/Added (\d{4}) Venmo cash/)[1];
+  await page.click('#settings-back');
+  await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  check('the Accounts screen offers to match up the hand-made account', (await page.locator('#matchup-box').count()) === 1 && /Venmo cash/.test(await page.textContent('#matchup-box')));
+  const sel = page.locator('#matchup-box select', { has: page.locator('option:checked', { hasText: /Venmo balance/ }) });
+  check('it guesses the Venmo statement account', (await sel.count()) === 1);
+  await sel.selectOption('venmo');
+  await page.click('#matchup-go'); await page.click('#matchup-go');
+  await page.waitForFunction(() => /Matched 1 account/.test(document.getElementById('settings-body').textContent));
+  check('the statement account takes the hand-made number and name', (await page.inputValue('#acctname-venmo')) === 'Venmo cash' && new RegExp(mine + ' · Venmo').test(await page.textContent('#acct-list')));
+  check('the hand-made one is gone from the offer', !/Venmo cash/.test((await page.locator('#matchup-box .acct-meta').allTextContents()).join(' ')));
+  await page.click('#settings-close');
+  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
+  await page.click('#fs-bs .expand-all');
+  const bs2 = await page.locator('#fs-bs').textContent();
+  check('the Balance Sheet lists it once, under the hand-made name and number', (bs2.match(/Venmo cash/g) ?? []).length === 1 && bs2.includes(mine));
+
   // undo takes the last import back
   await page.setInputFiles('#file', [write('Chase8527_Activity_20260301.CSV', HEAD + line('03/05/2026', 'LOYALTY REWARD', 9.99))]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });

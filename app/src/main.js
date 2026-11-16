@@ -10,7 +10,8 @@ import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
-import { FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { suggestPairs, applyMatchup, cleanMerged } from './matchup.js';
+import { SOURCE_ROLES, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -30,7 +31,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, merged: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, open: (() => { try { return new Set(JSON.parse(localStorage.getItem('my-budget-open') ?? '[]')); } catch { return new Set(); } })(), period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -75,7 +76,8 @@ function recompute() {
   applyCustoms(state.customs);
   applyNames(state.names);
   state.removed = cleanRemoved(state.removed);
-  applyRemoved(state.removed);
+  state.merged = cleanMerged(state.merged);
+  applyRemoved(state.removed, state.merged);
   state.parents = cleanParents(state.parents);
   applyParents(state.parents);
   // an account dragged under a heading by an older version had turned into a heading itself: put it back as an account
@@ -200,7 +202,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, sync: state.sync, opening: state.opening });
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -212,7 +214,8 @@ function loadSnapshot(d) {
   applyCustoms(state.customs);
   state.names = cleanNames(d.names);
   state.removed = cleanRemoved(d.removed);
-  applyRemoved(state.removed);
+  state.merged = cleanMerged(d.merged);
+  applyRemoved(state.removed, state.merged);
   state.parents = cleanParents(d.parents);
   applyParents(state.parents);
   state.coding = cleanCoding(d.coding);
@@ -225,7 +228,7 @@ function loadSnapshot(d) {
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; applyRemoved({}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; state.merged = {}; applyRemoved({}, {}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1975,10 +1978,42 @@ function renderAccountsScreen(body) {
       catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     } }));
   })();
+
+  // Your hand-made asset accounts and the statement accounts are the same thing twice. Each pair is shown first, nothing changes
+  // until you confirm, and the statement account keeps the number, name and place you gave yours.
+  const matchPanel = (() => {
+    const pairs = suggestPairs();
+    if (!pairs.length) return null;
+    const sources = Object.keys(SOURCE_ACCOUNTS).filter(k => (SOURCE_ROLES[k] ?? 'asset') === 'asset').sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code));
+    const filed = id => state.txs.filter(t => t.category === id).length;
+    const rows = pairs.map(p => h('div', { class: 'acct-row' },
+      h('span', { class: 'acct-meta', text: `${p.fromCode} · ${p.fromName} · ${plural(filed(p.from), 'item', 'items')} filed here` }),
+      h('label', { class: 'acct-under' }, h('span', { text: 'Same as' }),
+        h('select', { id: `matchup-${p.from}`, 'aria-label': `Which statement account ${p.fromName} is` },
+          h('option', { value: '', text: 'Leave as it is (no file import yet)', selected: !p.target }),
+          sources.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].name} (${last4Of(k) || 'no digits yet'})`, selected: k === p.target }))))));
+    const go = twoStep('Match these up', 'Tap again to confirm', () => {
+      const chosen = pairs.map(p => ({ from: p.from, target: document.getElementById(`matchup-${p.from}`).value })).filter(x => x.target);
+      const dup = chosen.find((x, i) => chosen.findIndex(y => y.target === x.target) !== i);
+      if (dup) { msg.className = 'msg error'; msg.textContent = `Two of your accounts are set to the same statement account (${SOURCE_ACCOUNTS[dup.target].name}). Pick one each.`; return; }
+      if (!chosen.length) { msg.className = 'msg error'; msg.textContent = 'Nothing is matched yet. Pick the statement account for at least one.'; return; }
+      const next = applyMatchup(state, chosen);
+      state.merged = next.merged; applyRemoved(state.removed, state.merged);
+      state.coding = next.coding; state.names = next.names; state.parents = next.parents; state.overrides = next.overrides; state.learned = next.learned; state.opening = next.opening;
+      refresh(`Matched ${plural(chosen.length, 'account', 'accounts')}. Each statement account now has your number and name, and what was filed under yours goes to Transfers.`);
+    }, 'btn');
+    go.id = 'matchup-go';
+    return h('details', { class: 'fine', id: 'matchup-box', open: true },
+      h('summary', { text: 'Match up my accounts' }),
+      h('div', { class: 'stack', style: 'margin-top:8px' },
+        h('p', { class: 'note', text: 'These are accounts you made by hand. Pick the statement account each one is, and the statement account takes over your number, name and place on the balance sheet. Yours is retired (it can come back), and anything you filed under it goes to Transfers so it pairs up with the other side. Make an encrypted backup first, in Settings.' }),
+        rows, go));
+  })();
   body.append(
     h('p', { class: 'sub', text: 'Each statement file is matched to an account by the last four digits in its name, like Chase1044_Activity.CSV. Set the digits once and every upload goes to the right account. If a file’s digits aren’t set up, I’ll ask you once.' }),
     h('h3', { class: 'set-h', text: 'Your accounts' }),
     h('div', { id: 'acct-list' }, Object.keys(SOURCE_ACCOUNTS).sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(row)),
+    matchPanel,
     h('details', { class: 'fine', id: 'acct-paste-box', open: !state.accounts.some(a => a.last4) },
       h('summary', { text: 'Paste a list of accounts' }),
       h('div', { class: 'stack', style: 'margin-top:8px' },
@@ -2223,7 +2258,7 @@ function renderCodingScreen(body) {
     h('div', {}, rows),
     h('div', { class: 'row-form', style: 'margin-top:12px' },
       twoStep('Reset everything to the defaults', 'Tap again to reset', () => {
-        state.coding = {}; state.names = {}; state.parents = {}; state.removed = {}; refresh();
+        state.coding = {}; state.names = {}; state.parents = {}; state.removed = {}; state.merged = {}; refresh();
       })));
 }
 

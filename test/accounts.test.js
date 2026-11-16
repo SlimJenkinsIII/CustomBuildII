@@ -164,3 +164,23 @@ test('Venmo, a card and a savings file each parse as before, and carry the accou
   assert.equal(rows[0].account, 'chase-bank-8527');
   assert.equal(parseStatement(CHASE([['10/19/2026', 'X', '4.50', 1]])).transactions[0].account, 'chase-checking');
 });
+
+test('an account is never dropped when the app opens: two saved with one number both stay, the second gets a free one', () => {
+  const out = cleanAccounts([
+    { key: 'savings-8527', name: 'Chase Savings (8527)', family: 'chase-bank', role: 'asset', type: 'savings', code: '1040', last4: '8527' },
+    { key: 'savings-1899', name: 'Chase Savings (1899)', family: 'chase-bank', role: 'asset', type: 'savings', code: '1040', last4: '1899' }]);
+  assert.deepEqual(out.map(a => a.key), ['savings-8527', 'savings-1899']);
+  assert.notEqual(out[0].code, out[1].code);
+});
+
+test('a new account never takes the number stored on an account you moved under another one', () => {
+  const accounts = [{ key: 'savings-8527', name: 'Chase Savings (8527)', family: 'chase-bank', role: 'asset', type: 'savings', code: '1040', last4: '8527' }];
+  applyAccountList(accounts);
+  try {
+    // it was moved, so on the TB it shows 1012 and 1040 looks free
+    const out = addAccountOfType(accounts, { name: 'Chase Savings (1899)', type: 'savings', last4: '1899' }, { 'src:savings-8527': '1012' });
+    assert.notEqual(out.accounts.find(a => a.key === out.key).code, '1040');
+    const listed = addFromList(accounts, 'Amex High-Yield Savings (6348)', { 'src:savings-8527': '1012' });
+    assert.ok(!listed.accounts.some(a => a.key !== 'savings-8527' && a.code === '1040'));
+  } finally { reset(); }
+});

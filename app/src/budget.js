@@ -7,6 +7,7 @@
 //                         + money-out still in "Needs review" (conservative: counted until you classify it)
 //   effect on savings   = target - spending   (+ means you're adding to savings, - means you're pulling from it)
 import { CATEGORIES } from './categories.js';
+import { cleanPay, savingsByAccount } from './paycheck.js';
 
 const PLANNED_GROUPS = new Set(['fixed', 'subscriptions', 'onetime', 'savings']);
 
@@ -23,6 +24,10 @@ export const daysInMonth = ym => { const [y, m] = ym.split('-').map(Number); ret
 export function validatePlan(plan) {
   if (!Number.isInteger(plan.income) || plan.income < 0) throw new Error('Plan income must be whole cents');
   if (plan.vacation != null && (!Number.isInteger(plan.vacation) || plan.vacation < 0)) throw new Error('Vacation set-aside must be whole cents');
+  if (plan.pay != null && !cleanPay(plan.pay)) throw new Error('Pay details are incomplete');
+  for (const [key, cents] of Object.entries(plan.accounts ?? {})) {
+    if (!/^src:[a-z0-9-]{3,32}$/.test(key) || !Number.isInteger(cents) || cents < 0) throw new Error('Savings by account must be whole cents per account');
+  }
   for (const [id, cents] of Object.entries(plan.planned ?? {})) {
     const cat = CATEGORIES[id];
     if (!cat) throw new Error(`Plan has unknown category "${id}"`);
@@ -35,7 +40,8 @@ export function validatePlan(plan) {
 
 export function plannedFreeCash(plan) {
   validatePlan(plan);
-  return plan.income - (plan.vacation ?? 0) - Object.values(plan.planned ?? {}).reduce((a, b) => a + b, 0);
+  return plan.income - (plan.vacation ?? 0) - Object.values(plan.planned ?? {}).reduce((a, b) => a + b, 0)
+    - Object.values(plan.accounts ?? {}).reduce((a, b) => a + b, 0);       // savings targets for your own accounts
 }
 
 export function targetForRange(plan, startIso, days) {
@@ -100,7 +106,10 @@ export function monthSummary(transactions, plan, ym) {
     subscriptions: { planned: plannedOf('subscriptions'), actual: sumGroup('subscriptions', -1) },
     onetime: { planned: plannedOf('onetime'), actual: sumGroup('onetime', -1) },
     vacation: { planned: plan.vacation ?? 0, actual: sumGroup('vacation', -1) },
-    savings: { planned: plannedOf('savings'), actual: sumGroup('savings', -1) },
+    savings: (() => {
+      const byAccount = savingsByAccount(transactions, plan.accounts, ym);
+      return { planned: plannedOf('savings') + byAccount.reduce((s, a) => s + a.planned, 0), actual: sumGroup('savings', -1) + byAccount.reduce((s, a) => s + a.actual, 0), byAccount };
+    })(),
     free: { planned: free, actual: spent, effect: free - spent },
     needsReviewCount: inMonth.filter(t => t.category === 'review' && t.cents < 0).length,
   };

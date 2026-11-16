@@ -12,6 +12,7 @@ import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { suggestPairs, applyMatchup, cleanMerged } from './matchup.js';
 import { hasKids, SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { cleanPay, monthlyTakeHome, monthIncome, PAY_EVERY, DEFAULT_401K_LIMIT } from './paycheck.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -1151,6 +1152,31 @@ function renderHabits(d) {
 }
 
 // ----- one month, start to finish -----
+// Phase 1 of the month: what came in, the bonus part on its own, the 401(k), and savings by account.
+function phaseOne(m) {
+  const row = (label, actual, planned, id) => [h('span', { text: label }), h('span', { id, text: planned === null ? money(actual) : `${money(actual)} of ${money(planned)}` })];
+  const out = [h('h3', { class: 'set-h', text: '1. Pay and savings' })];
+  const rows = [];
+  if (plan.pay) {
+    const inc = monthIncome(state.txs, plan.pay, state.ym);
+    rows.push(...row(`Paychecks (${inc.paychecks.length})`, inc.received - inc.extra, inc.planned, 'm-pay'));
+    if (inc.extra > 0) rows.push(...row('Extra (bonus or extra pay)', inc.extra, null, 'm-extra'));
+    rows.push(...row('401(k) this month' + (inc.matchMonth ? `, plus ${money(inc.matchMonth)} match` : ''), inc.contribMonth, null, 'm-401k'));
+    out.push(h('div', { class: 'plan-rows' }, rows));
+    out.push(h('p', { class: 'note', id: 'm-401k-ytd', text: `401(k) so far this year: ${money(inc.contribYtd)} of the ${money(inc.limit)} limit${inc.matchYtd ? `, and ${money(inc.matchYtd)} from your employer` : ''}.`
+      + (inc.capDate ? ` You reached the limit on ${fmtFull(inc.capDate)}, so nothing more comes out and your paychecks are bigger for the rest of the year.` : '') }));
+    if (inc.extra > 0) out.push(h('p', { class: 'note', text: `The ${money(inc.extra)} extra is yours to use however you like. It isn’t counted as savings and doesn’t change your free cash.` }));
+  } else {
+    out.push(h('div', { class: 'plan-rows' }, row('Paycheck', m.income.actual, m.income.planned, 'm-pay')));
+    out.push(h('p', { class: 'note', text: 'Add your pay details in the plan (one ordinary paystub) and I’ll read every paycheck: normal, bonus, and your 401(k) up to the yearly limit.' }));
+  }
+  const acc = m.savings.byAccount ?? [];
+  out.push(h('div', { class: 'plan-rows', id: 'm-savings' },
+    acc.length ? acc.flatMap(a => row(`Into ${SOURCE_ACCOUNTS[a.key.slice(4)]?.name ?? a.key}`, a.actual, a.planned, `m-save-${a.key.slice(4)}`))
+      : row('Savings moved', m.savings.actual, m.savings.planned, 'm-save')));
+  return out;
+}
+
 function renderMonth(asOf, keepFocus) {
   const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort().reverse();
   const p = monthPace(state.txs, plan, state.ym, asOf);
@@ -1167,11 +1193,13 @@ function renderMonth(asOf, keepFocus) {
     h('p', { class: 'sub', text: p.complete
       ? `Spent ${money(p.spent)} of ${money(p.free)} free cash. The month finished ${money(Math.abs(p.left))} ${over ? 'over' : 'under'}.`
       : `Month still in progress: ${money(p.spent)} spent so far, out of ${money(p.free)} for the whole month.` }),
+    phaseOne(m),
+    h('h3', { class: 'set-h', text: '2. Fixed bills' }),
     h('div', { class: 'plan-rows' },
-      row('Paycheck', m.income), row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
+      row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
       row('One-time & annual set-aside', m.onetime),
-      (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation),
-      row('Savings moved', m.savings)));
+      (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation)),
+    h('p', { class: 'note', text: '3. Free cash is the verdict at the top: what was left after your pay, savings and fixed bills, against what you spent on everything else.' }));
   if (keepFocus) $('month').focus();
 }
 
@@ -1721,7 +1749,13 @@ function planFieldDefs() {
     set: (p, c) => { p.planned = p.planned ?? {}; if (c) p.planned[cat.id] = c; else delete p.planned[cat.id]; },
   });
   return [
-    { heading: 'Take-home pay each month', fields: [{ id: 'income', label: 'After tax and 401(k)', get: () => plan.income, set: (p, c) => { p.income = c; } }] },
+    ...(plan.pay ? [] : [{ heading: 'Take-home pay each month', fields: [{ id: 'income', label: 'After tax and 401(k)', get: () => plan.income, set: (p, c) => { p.income = c; } }] }]),
+    { heading: 'Savings: what you move into each account each month', fields: Object.keys(SOURCE_ACCOUNTS).filter(k => ['savings', 'investment'].includes(typeOf(k)))
+      .sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(k => ({
+        id: `acct-${k}`, label: `${SOURCE_ACCOUNTS[k].code} ${SOURCE_ACCOUNTS[k].name}`,
+        get: () => plan.accounts?.[`src:${k}`] ?? 0,
+        set: (p, c) => { p.accounts = p.accounts ?? {}; if (c) p.accounts[`src:${k}`] = c; else delete p.accounts[`src:${k}`]; },
+      })) },
     ...[['fixed', 'Fixed monthly expenses'], ['subscriptions', 'Subscriptions'], ['onetime', 'Set aside for one-time purchases & annual fees'], ['savings', 'Savings & investing moved each month']]
       .map(([g, heading]) => ({ heading, fields: idsIn(g).map(planned) })),
     { heading: 'Vacations', fields: [{ id: 'vacation', label: 'Set aside for trips each month', get: () => plan.vacation ?? 0, set: (p, c) => { p.vacation = c; } }] },
@@ -1766,8 +1800,35 @@ function renderPlan() {
         h('span', { class: 'pct', id: `pct-${f.id}` }));
     }
   }
+  // Your pay, from one ordinary paystub. Every paycheck after that is read against it (normal, bonus, or past the 401(k) limit).
+  const pay = plan.pay ?? {};
+  const payMsg = h('p', { class: 'msg', id: 'pay-msg', role: 'status' });
+  const num = (id, label, value, hint) => [h('label', { for: id, text: label }), h('input', { id, type: 'text', inputmode: 'decimal', value, placeholder: hint ?? '' }), h('span', { class: 'pct' })];
+  const pctText = bp => (bp ? String(bp / 100) : '');
+  const payForm = h('div', { class: 'field-grid plan', id: 'pay-form' },
+    h('h3', { class: 'set-h', text: '1. Your pay (from one ordinary paystub)' }),
+    h('label', { for: 'pay-every', text: 'Paid' }),
+    h('select', { id: 'pay-every' }, Object.keys(PAY_EVERY).map(k => h('option', { value: k, text: { weekly: 'Every week', biweekly: 'Every two weeks', semimonthly: 'Twice a month', monthly: 'Monthly' }[k], selected: (pay.every ?? 'biweekly') === k }))), h('span'),
+    ...num('pay-gross', 'Gross pay per paycheck', pay.gross ? dollars(pay.gross) : ''),
+    ...num('pay-take', 'Take-home (deposited)', pay.takeHome ? dollars(pay.takeHome) : ''),
+    ...num('pay-pct', 'Your 401(k) %', pctText(pay.pct), 'e.g. 6'),
+    ...num('pay-match', 'Employer match %', pctText(pay.match), 'e.g. 4'),
+    ...num('pay-limit', '401(k) yearly limit', dollars(pay.limit ?? DEFAULT_401K_LIMIT)));
+  const savePay = h('button', { type: 'button', class: 'btn small', id: 'pay-save', text: 'Save pay details', onclick: () => {
+    try {
+      const pctOf = id => { const v = $(id).value.trim().replace('%', ''); if (v === '') return 0; const n = Number(v); if (!Number.isFinite(n) || n < 0 || n > 100) throw new Error('pct'); return Math.round(n * 100); };
+      const next = cleanPay({ every: $('pay-every').value, gross: toCents($('pay-gross').value), takeHome: toCents($('pay-take').value), pct: pctOf('pay-pct'), match: pctOf('pay-match'), limit: toCents($('pay-limit').value) });
+      if (!next) throw new Error('pay');
+      changePlan(p => { p.pay = next; p.income = monthlyTakeHome(next); });
+      renderPlan();
+      $('pay-msg').textContent = `Saved. Your usual take-home is ${money(monthlyTakeHome(next))} a month (the yearly total spread evenly).`;
+    } catch { payMsg.className = 'msg error'; payMsg.textContent = 'Fill in gross pay and take-home as amounts (take-home can’t be more than gross), and the percentages as numbers like 6.'; }
+  } });
+  const clearPay = plan.pay && h('button', { type: 'button', class: 'btn ghost small', id: 'pay-clear', text: 'Enter take-home by hand instead', onclick: () => { changePlan(p => { delete p.pay; }); renderPlan(); } });
   fill($('plan-body'),
-    h('p', { class: 'sub', style: 'margin:4px 0 10px', text: 'What comes in and what you set aside each month. Free cash is whatever is left, and it sets your weekly target. Type dollars, or a percentage of take-home like 15%.' }),
+    h('p', { class: 'sub', style: 'margin:4px 0 10px', text: 'Three steps: your pay and what you save first, then fixed bills, and whatever is left is free cash. Free cash sets your weekly and monthly target, and that is the verdict: over or under. Type dollars, or a percentage of take-home like 15%.' }),
+    payForm, h('div', { class: 'row-form' }, savePay, clearPay), payMsg,
+    plan.pay && h('p', { class: 'note', text: `Usual take-home: ${money(plan.income)} a month. A paycheck bigger than usual is read as a bonus: it is shown on its own as extra cash for you to use, and doesn’t change your free cash.` }),
     h('div', { class: 'field-grid plan' }, rows),
     h('p', { class: 'free-line', id: 'plan-summary', style: 'margin-top:10px' }));
   updatePlanSummary();

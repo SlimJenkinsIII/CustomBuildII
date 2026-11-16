@@ -166,7 +166,7 @@ let lastImport = null;                                    // memory only: lets y
 async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
   let added = 0, moved = 0, skipped = 0, external = 0, details = [];
-  const left = [], movedInto = new Set(), wentInto = new Map();
+  const left = [], movedInto = new Set(), wentInto = new Map(), balanceNotes = [];
   const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors };
   try {
     for (const file of files) {
@@ -180,6 +180,11 @@ async function importFiles(files) {
       parsed = parseStatement(text, where.key);
       const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyForFormat(parsed.format)]);
       state.anchors = mergeAnchors(state.anchors, parsed.anchors);
+      {
+        const nm = SOURCE_ACCOUNTS[where.key].name, got = [...parsed.anchors].sort((x, y) => x.date.localeCompare(y.date));
+        balanceNotes.push(got.length ? `${nm}: read ${plural(got.length, 'balance', 'balances')} from the file (${money(got[0].cents)} on ${fmtFull(got[0].date)}${got.length > 1 ? `, up to ${money(got[got.length - 1].cents)} on ${fmtFull(got[got.length - 1].date)}` : ''})`
+          : `${nm}: no balance in this file`);
+      }
       state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; moved += r.movedCount;
       if (r.movedCount) movedInto.add(SOURCE_ACCOUNTS[where.key].name);
       wentInto.set(SOURCE_ACCOUNTS[where.key].name, (wentInto.get(SOURCE_ACCOUNTS[where.key].name) ?? 0) + r.addedCount + r.movedCount);
@@ -191,6 +196,7 @@ async function importFiles(files) {
       (skipped ? ` and skipped ${skipped} you already had` : '') + '. Nothing was uploaded.' +
       (wentInto.size ? ` Went into: ${[...wentInto].map(([n, c]) => `${n} (${c})`).join(', ')}.` : '') +
       (left.length ? ` Skipped ${left.join(', ')}.` : '') +
+      (balanceNotes.length ? ` Balances: ${balanceNotes.join('; ')}.` : '') +
       (external ? ` ${plural(external, 'Venmo payment', 'Venmo payments')} you funded from a bank or card ${external === 1 ? 'was' : 'were'} not counted again (${external === 1 ? 'it is' : 'they are'} already on that statement); I used ${external === 1 ? 'it' : 'them'} to say who you paid and why.` : '');
   } catch (err) {
     $('status').textContent = err.message;

@@ -39,3 +39,42 @@ export function mergeIntoAccount(existing, incoming, account, defaultAccount) {
   const merged = existing.map(e => (moved.has(e.id) ? { ...e, account, aliases: [...(e.aliases ?? []), moved.get(e.id)] } : e));
   return { merged: [...merged, ...fresh], addedCount: fresh.length, skippedCount: incoming.length - fresh.length - moved.size, movedCount: moved.size };
 }
+
+// Lines saved under an account that no longer exists (its key is not one of your accounts). They show as account 1999 until you
+// move them into a real account or delete them.
+export function orphanAccounts(raw, known) {
+  const by = new Map();
+  for (const t of raw) {
+    if (known(t.account)) continue;
+    const o = by.get(t.account) ?? { key: t.account, count: 0, first: t.date, last: t.date };
+    o.count++; if (t.date < o.first) o.first = t.date; if (t.date > o.last) o.last = t.date;
+    by.set(t.account, o);
+  }
+  return [...by.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// Moves an orphan account's lines into `to`. A line that `to` already has (the same statement uploaded again) is not added twice: the
+// copy already there is kept, and your coding on the orphan line moves onto it unless that copy has coding of its own.
+export function moveOrphans(raw, overrides, from, to) {
+  const out = { overrides: { ...overrides }, moved: 0, merged: 0 };
+  const claimed = new Set();
+  const keep = [];
+  for (const t of raw) {
+    if (t.account !== from) { keep.push(t); continue; }
+    const twin = raw.find(e => e.account === to && !claimed.has(e.id) && sameCharge(e, t));
+    if (twin) {
+      claimed.add(twin.id); out.merged++;
+      if (out.overrides[t.id] && !out.overrides[twin.id]) out.overrides[twin.id] = out.overrides[t.id];
+      delete out.overrides[t.id];
+      continue;
+    }
+    // it keeps its id (so your coding stays attached) and remembers the id it would have in `to`, so uploading that statement again skips it
+    keep.push({ ...t, account: to, aliases: [...(t.aliases ?? []), t.id.replace(/^[^|]*\|/, `${to}|`)] }); out.moved++;
+  }
+  return { ...out, raw: keep };
+}
+
+export const dropAccountLines = (raw, overrides, from) => {
+  const gone = new Set(raw.filter(t => t.account === from).map(t => t.id));
+  return { raw: raw.filter(t => t.account !== from), overrides: Object.fromEntries(Object.entries(overrides).filter(([id]) => !gone.has(id))), count: gone.size };
+};

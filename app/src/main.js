@@ -1,5 +1,5 @@
 import { parseStatement, toCents } from './parsers.js';
-import { withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
+import { orphanAccounts, moveOrphans, dropAccountLines, withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
@@ -214,6 +214,7 @@ $('undo-import').addEventListener('click', () => {
   if (!lastImport) return;
   state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts; state.anchors = lastImport.anchors;
   if (lastImport.opening) state.opening = lastImport.opening;
+  if (lastImport.overrides) state.overrides = lastImport.overrides;
   lastImport = null; $('undo-import').hidden = true;
   $('status').textContent = 'Import undone.';
   resetGl(); recompute(); render(); markDirty();
@@ -2076,8 +2077,42 @@ function renderAccountsScreen(body) {
         h('p', { class: 'note', text: 'These asset accounts are on your books but no statement file feeds them. If one is really a statement account, pick which and tap Match: the statement account takes its number, name and place. If you don’t want it at all, tap Remove: it is gone for good and nothing files to it again. Either way, anything filed under it becomes a transfer. Make an encrypted backup first, in Settings.' }),
         rows, go));
   })();
+
+  // Lines saved under an account that no longer exists show as account 1999. Here you can see them and move them into one of your
+  // accounts (anything already there is not added twice) or delete them.
+  const orphanPanel = (() => {
+    const list = orphanAccounts(state.raw, k => !!SOURCE_ACCOUNTS[k]);
+    if (!list.length) return null;
+    const targets = Object.keys(SOURCE_ACCOUNTS).sort((x, y) => SOURCE_ACCOUNTS[x].code.localeCompare(SOURCE_ACCOUNTS[y].code));
+    const keepUndo = () => { lastImport = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, opening: state.opening, overrides: state.overrides }; $('undo-import').hidden = false; resetGl(); };
+    return h('div', { class: 'notice', id: 'orphan-box', style: 'display:block;margin-bottom:12px' },
+      h('strong', { text: 'Lines in an account that no longer exists (shown as 1999)' }),
+      h('p', { class: 'note', text: 'These came from a statement uploaded into an account that has since gone. Move them into the right account (anything already there isn’t added twice, and your coding is kept), or delete them and upload the statement again.' }),
+      list.map(o => {
+        const pick = h('select', { id: `orphan-to-${o.key}`, 'aria-label': `Move the lines from ${o.key} into` }, targets.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].code} ${SOURCE_ACCOUNTS[k].name}` })));
+        const del = twoStep('Delete these lines', 'Tap again to delete', () => {
+          keepUndo();
+          const out = dropAccountLines(state.raw, state.overrides, o.key);
+          state.raw = out.raw; state.overrides = out.overrides;
+          state.anchors = state.anchors.filter(x => x.account !== o.key);
+          refresh(`Deleted ${plural(out.count, 'line', 'lines')}. Account 1999 is gone.`);
+        }, 'btn ghost danger small');
+        del.id = `orphan-del-${o.key}`;
+        return h('div', { class: 'acct-row' },
+          h('span', { class: 'acct-meta', text: `“${o.key}” · ${plural(o.count, 'line', 'lines')} · ${fmtFull(o.first)} to ${fmtFull(o.last)}` }),
+          h('div', { class: 'row-form', style: 'grid-column:1/-1' }, pick,
+            h('button', { type: 'button', class: 'btn small', id: `orphan-move-${o.key}`, text: 'Move them in', onclick: () => {
+              keepUndo();
+              const out = moveOrphans(state.raw, state.overrides, o.key, pick.value);
+              state.raw = out.raw; state.overrides = out.overrides;
+              state.anchors = mergeAnchors(state.anchors.filter(x => x.account !== o.key), state.anchors.filter(x => x.account === o.key).map(x => ({ ...x, account: pick.value })));
+              refresh(`Moved ${plural(out.moved, 'line', 'lines')} into ${SOURCE_ACCOUNTS[pick.value].name}${out.merged ? `; ${plural(out.merged, 'was', 'were')} already there, so ${out.merged === 1 ? 'it was' : 'they were'} not added twice` : ''}. Account 1999 is gone.`);
+            } }), del));
+      }));
+  })();
   body.append(
     h('p', { class: 'sub', text: 'List every account you have, assets (Checking, Savings, Investment) and credit cards. Each statement file goes to the account whose last four digits are in its name, like Chase1044_Activity.CSV. If the name doesn’t settle it, I’ll ask which account it is, once, and remember.' }),
+    orphanPanel,
     h('h3', { class: 'set-h', text: 'Your accounts' }),
     h('div', { id: 'acct-list' }, Object.keys(SOURCE_ACCOUNTS).sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(row)),
     matchPanel,

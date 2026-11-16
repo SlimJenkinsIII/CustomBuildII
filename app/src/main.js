@@ -1207,8 +1207,10 @@ function renderMonth(asOf, keepFocus) {
     h('h3', { class: 'set-h', text: '3. Fixed bills' }),
     h('div', { class: 'plan-rows' },
       row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
-      row('One-time & annual set-aside', m.onetime),
-      (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation)),
+      row('One-time & annual set-aside', m.onetime)),
+    // trips are paid for from savings, so this is just what they cost this month; it isn't a fixed amount and isn't in the verdict
+    (m.vacation.actual !== 0 || m.vacation.planned > 0) && h('div', { class: 'plan-rows', id: 'm-vacations' },
+      h('span', { text: 'Vacations' }), h('span', { text: m.vacation.planned > 0 ? `${money(m.vacation.actual)} of ${money(m.vacation.planned)}` : money(m.vacation.actual) })),
     h('p', { class: 'note', text: '4. Free cash is the verdict at the top: what was left after your pay, savings and fixed bills, against what you spent on everything else.' }));
   if (keepFocus) $('month').focus();
 }
@@ -1779,7 +1781,7 @@ function planFieldDefs() {
       } : planned(CATEGORIES[a.key]))) },
     ...[['fixed', '3. Fixed monthly expenses'], ['subscriptions', 'Subscriptions'], ['onetime', 'Set aside for one-time purchases & annual fees']]
       .map(([g, heading]) => ({ heading, fields: idsIn(g).map(planned) })),
-    { heading: 'Vacations', fields: [{ id: 'vacation', label: 'Set aside for trips each month', get: () => plan.vacation ?? 0, set: (p, c) => { p.vacation = c; } }] },
+    ...(plan.vacation ? [{ heading: 'Vacations (set this to 0: trips are paid from your savings)', fields: [{ id: 'vacation', label: 'Set aside for trips each month', get: () => plan.vacation ?? 0, set: (p, c) => { if (c) p.vacation = c; else delete p.vacation; } }] }] : []),
   ];
 }
 

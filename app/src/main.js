@@ -11,7 +11,7 @@ import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forge
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { suggestPairs, applyMatchup, cleanMerged } from './matchup.js';
-import { SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { hasKids, SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -91,6 +91,8 @@ function recompute() {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
     const home = resolveCategory(out.category);
+    // a main account (one with sub accounts under it) takes nothing of its own: the charge waits in Needs review until you pick a sub account
+    if (hasKids(home)) return { ...out, category: 'review', chosen: false, categoryReason: `Pick a sub account of ${CATEGORIES[home].name}` };
     return home === out.category ? out : { ...out, category: home };
   }).sort((a, b) => a.date.localeCompare(b.date));
   const months = [...new Set(state.txs.map(t => monthOf(t.date)))].sort();
@@ -1593,7 +1595,10 @@ function renderMatrix(asOf) {
       body.append(h('tr', { class: 'hdr' }, h('td', { class: 'acct', text: l.code ? `${l.code}  ${l.label}` : l.label }), h('td', { colspan: span })));
       const rows = [];
       while (m.lines[i + 1]?.kind === 'row') rows.push({ ...m.lines[++i], key: m.lines[i].id });
-      for (const e of unfolded(nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0 }))) lineRow(e.data, e);
+      // a main account with nothing booked to it still shows, as the sum of the sub accounts under it
+      const under = (key, g) => { for (let at = parentOf(key); at; at = parentOf(at)) if (at === g) return true; return false; };
+      const mains = parentAccounts(state.trips).filter(g => rows.some(r => under(r.key, g.key)) && !rows.some(r => r.key === g.key));
+      for (const e of unfolded(nestRows(rows, { rollup: rollupIs, hasOwn: r => r.total !== 0, ghosts: mains }))) lineRow(e.data, e);
       continue;
     }
     if (mo && l.kind === 'running') continue;

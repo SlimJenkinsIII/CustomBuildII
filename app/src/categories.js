@@ -197,6 +197,9 @@ export function applyTripNames(trips = []) {
   for (let slot = 1; slot <= MAX_TRIPS; slot++) CATEGORIES[`vac${slot}`].name = trips.find(t => t.slot === slot)?.name ?? `Trip ${slot}`;
 }
 
+// An account with something under it is a main account: it shows the sum of what is under it and nothing can be booked to it directly.
+export const hasKids = id => Object.values(CATEGORIES).some(y => y.id !== id && !(y.id in REMOVED) && y.id !== 'review' && parentOf(y.id) === id);
+
 // Categories you can pick for a transaction: everything except trip blocks that don't exist yet.
 export function selectableCategories(trips = []) {
   const live = liveFor(trips);
@@ -205,7 +208,7 @@ export function selectableCategories(trips = []) {
   const unassignedOk = x => !(trips.length && x.slot === 0);
   // In number order, so your own accounts sit where their number puts them, not at the end. Anything that isn't an account comes last.
   return Object.values(CATEGORIES)
-    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && x.id !== 'review' && live(x) && unassignedOk(x))
+    .filter(x => !(x.id in REMOVED) && x.group !== 'header' && x.id !== 'review' && live(x) && unassignedOk(x) && !hasKids(x.id))
     .map(x => ({ id: x.id, label: codeLabel(x.id), class: x.code ? classOf(x.code) : 'Not an account', code: x.code ?? '9999', depth: x.code ? depthOf(x.id) : 0 }))
     .sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
 }

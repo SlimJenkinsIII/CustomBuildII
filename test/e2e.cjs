@@ -293,9 +293,9 @@ server.listen(0, async () => {
   await goFS('is');
   const isRowBy = async (sel, text) => page.locator(`#fs-is tbody tr${sel}`).filter({ hasText: text }).first();
   const lastCell = async tr => Number((await tr.locator('td').last().textContent()).replace(/[(),\s]/g, '').replace('\u2013', '0'));
-  const parentTotal = await lastCell(await isRowBy('.parent-row', 'Subscriptions')), netflixTotal = await lastCell(await isRowBy('', 'Netflix')), otherTotal = await lastCell(await page.locator('#fs-is tbody tr:has(td.own-line)').first());
-  check('a parent account on the Income Statement is the sum of its sub accounts', parentTotal > 0 && parentTotal === netflixTotal + otherTotal, `${parentTotal} vs ${netflixTotal} + ${otherTotal}`);
-  check('its own money is not hidden: it sits on an (other) line', /\(other\)/.test(await page.locator('#fs-is tbody tr:has(td.own-line)').first().textContent()));
+  const parentTotal = await lastCell(await isRowBy('.parent-row', 'Subscriptions')), netflixTotal = await lastCell(await isRowBy('', 'Netflix')), otherRows = await page.locator('#fs-is tbody tr:has(td.own-line)').count(), otherTotal = otherRows ? await lastCell(await page.locator('#fs-is tbody tr:has(td.own-line)').first()) : 0;
+  check('a parent account on the Income Statement is the sum of its sub accounts, with no money of its own', parentTotal > 0 && otherRows === 0 && parentTotal === netflixTotal + otherTotal, `${parentTotal} vs ${netflixTotal} + ${otherTotal}`);
+  check('nothing can sit on the main account itself: no (other) line, what was filed there waits in Needs review', otherRows === 0 && /Needs review/.test(await page.locator('#fs-is').textContent()));
   await goFS('bs');
   const bsCells = async tr => (await tr.locator('td').allTextContents()).slice(1).map(t => t.trim());
   const chk = await bsCells(page.locator('#fs-bs tbody tr.parent-row').filter({ hasText: 'Checking' }).first());

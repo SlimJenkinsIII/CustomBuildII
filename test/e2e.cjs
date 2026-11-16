@@ -287,7 +287,7 @@ server.listen(0, async () => {
   await page.click('#fs-bs .expand-all');
   check('Expand all opens every main account, on every page', (await page.locator('#fs-bs td.acct.sub-acct').count()) >= 1);
   const bsOpen = await page.locator('#fs-bs').textContent();
-  check('every bank, card, Venmo and savings account is listed, even with nothing in it', ['Venmo balance', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account', 'Crypto', 'Chase Savings 8527', 'Roth IRA'].every(n => bsOpen.includes(n)), ['Venmo balance', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account', 'Crypto', 'Chase Savings 8527', 'Roth IRA'].filter(n => !bsOpen.includes(n)).join(', ') + ' missing');
+  check('every bank, card, Venmo and your own savings account is listed, even with nothing in it; empty built-in placeholders are not', ['Venmo balance', 'Chase Savings 8527', 'Roth IRA'].every(n => bsOpen.includes(n)) && !/Amex High-Yield Savings|Crypto/.test(bsOpen), ['Venmo balance', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account', 'Crypto', 'Chase Savings 8527', 'Roth IRA'].filter(n => !bsOpen.includes(n)).join(', ') + ' missing');
   await goFS('tb');
   check('and the other pages follow', (await page.locator('#fs-tb td.acct.sub-acct').count()) >= 1);
   await goFS('is');

@@ -399,7 +399,9 @@ export function ghostAccounts(trips = []) {
   const found = new Map(parents.map(p => [p.key, { ...p, leaf: false }]));
   const add = (key, code, name) => { if (!found.has(key) && code) found.set(key, { key, code, name, class: classOf(code), leaf: !isParent.has(key) }); };
   for (const [k, v] of Object.entries(SOURCE_ACCOUNTS)) add(`src:${k}`, v.code, v.name);
-  for (const x of Object.values(CATEGORIES)) if (x.group === 'savings' && !(x.id in REMOVED) && live(x)) add(x.id, x.code, x.name);
+  // savings accounts you made are always listed. The built-in placeholders (Chase Savings, Amex High-Yield Savings ...) only show when
+  // something is in them, like any other account, so an empty one can't sit there looking like a second Chase Savings.
+  for (const x of Object.values(CATEGORIES)) if (x.group === 'savings' && x.custom && !(x.id in REMOVED) && live(x)) add(x.id, x.code, x.name);
   return [...found.values()].sort((a, b) => a.code.localeCompare(b.code));
 }
 

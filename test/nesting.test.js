@@ -132,9 +132,10 @@ test('trips are main accounts once added, and "no trip yet" is not forced', () =
 
 import { ghostAccounts } from '../app/src/categories.js';
 
-test('every bank, card, Venmo and savings account is listed for the balance sheet, even with nothing in it', () => {
+test('every bank, card and Venmo account is listed for the balance sheet, even with nothing in it; empty built-in savings placeholders are not', () => {
   const names = ghostAccounts([]).map(g => g.name);
-  for (const n of ['Chase checking', 'Venmo balance', 'Chase credit card', 'Amex card', 'Chase Savings', 'Amex High-Yield Savings', 'Investment account']) assert.ok(names.includes(n), n);
+  for (const n of ['Chase checking', 'Venmo balance', 'Chase credit card', 'Amex card']) assert.ok(names.includes(n), n);
+  for (const n of ['Chase Savings', 'Amex High-Yield Savings', 'Crypto (Coinbase)']) assert.ok(!names.includes(n), n);
   const codes = ghostAccounts([]).map(g => g.code);
   assert.deepEqual(codes, [...codes].sort());                                         // in number order
   assert.ok(ghostAccounts([]).filter(g => g.name === 'Venmo balance').every(g => g.leaf && g.class === 'Assets'));

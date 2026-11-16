@@ -77,6 +77,6 @@ export function applyMatchup(state, pairs) {
 export function cleanMerged(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
-  for (const [from, target] of Object.entries(raw)) if (CATEGORIES[from] && CATEGORIES[from].group === SAVINGS_GROUP && SOURCE_ACCOUNTS[target]) out[from] = target;
+  for (const [from, target] of Object.entries(raw)) if (CATEGORIES[from] && CATEGORIES[from].group === SAVINGS_GROUP && (target === '' || SOURCE_ACCOUNTS[target])) out[from] = target;   // '' = removed for good
   return out;
 }

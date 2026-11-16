@@ -10,6 +10,9 @@ import { CATEGORIES, SOURCE_ROLES } from './categories.js';
 const PAYMENT_WORDS = /payment|pymt|pmt|epay|autopay|thank you/i;
 const CARD_WORDS = /\bcard\b|\bcrd\b|amex|american express|chase credit|credit card/i;
 // A cash-out from the Venmo balance to your bank is money moving between your own accounts, never spending.
+// A transfer between two of your own bank accounts ("Online Transfer to SAV ...8527", "Transfer from CHK ...1044"). It is never spending
+// and never belongs to a made-up savings account: until the other account's statement is in, it waits in transfers in transit.
+export const isOwnTransfer = t => /\bTRANSFER (TO|FROM) (SAV|CHK|SAVINGS|CHECKING)\b/i.test(t.description);
 export const isVenmoCashOut = t => t.account === 'venmo' && /^VENMO TRANSFER TO BANK/.test(t.description);
 
 export function isCardPayment(t) {
@@ -68,10 +71,11 @@ export function ruleMatches(rule, t) {
 //   { 'chase-savings': 'save_chase' }.  A matched transfer INTO such an account counts as a
 // savings contribution on the sending side; the receiving side is ignored so it isn't counted twice.
 export function categorize(transactions, {
-  userRules = [], rules = defaultRules, savingsAccounts = {}, reimbursePromptCents = 10000,
+  userRules = [], rules = defaultRules, savingsAccounts = {}, reimbursePromptCents = 10000, ownAccounts = false,
 } = {}) {
   const byId = new Map(transactions.map(t => [t.id, t]));
-  const allRules = [...userRules, ...rules];
+  // once your savings accounts have statements of their own, no rule files a transfer into a made-up savings account
+  const allRules = [...userRules, ...rules.filter(x => !(ownAccounts && CATEGORIES[x.category]?.group === 'savings'))];
   for (const rule of allRules) {
     if (!CATEGORIES[rule.category]) throw new Error(`Rule "${rule.contains}" uses unknown category "${rule.category}"`);
   }
@@ -83,9 +87,9 @@ export function categorize(transactions, {
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';
       why = savingsCat ? `transfer into ${other.account}` : 'matched transfer';
-    } else if (t.transfer === 'unmatched' && (isCardPayment(t) || isVenmoCashOut(t))) {
+    } else if ((t.transfer === 'unmatched' && (isCardPayment(t) || isVenmoCashOut(t))) || (ownAccounts && isOwnTransfer(t))) {
       category = 'transfer';
-      why = isVenmoCashOut(t) ? 'Venmo cash-out (the bank deposit isn’t imported yet)' : 'card payment (the other account isn’t imported yet)';
+      why = ownAccounts && isOwnTransfer(t) ? 'transfer between your own accounts (the other account’s statement isn’t imported yet)' : isVenmoCashOut(t) ? 'Venmo cash-out (the bank deposit isn’t imported yet)' : 'card payment (the other account isn’t imported yet)';
     } else {
       const rule = allRules.find(x => ruleMatches(x, t));
       if (rule) { category = rule.category; why = `rule: ${rule.contains}`; }

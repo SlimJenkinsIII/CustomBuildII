@@ -86,7 +86,7 @@ function recompute() {
   if (repaired !== state.customs) { state.customs = repaired; applyCustoms(state.customs); state.parents = cleanParents(state.parents); applyParents(state.parents); markDirty(); }
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(state.raw, state.venmoDetail)), { userRules: customRules(state.customs) }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
+  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(state.raw, state.venmoDetail)), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings() }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -213,6 +213,7 @@ async function importFiles(files) {
 $('undo-import').addEventListener('click', () => {
   if (!lastImport) return;
   state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts; state.anchors = lastImport.anchors;
+  if (lastImport.opening) state.opening = lastImport.opening;
   lastImport = null; $('undo-import').hidden = true;
   $('status').textContent = 'Import undone.';
   resetGl(); recompute(); render(); markDirty();
@@ -225,6 +226,10 @@ $('file').addEventListener('change', e => {
 
 // ---------- saving ----------
 const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, sync: state.sync, opening: state.opening });
+
+// True once you have an asset account of your own besides the main checking and Venmo (a savings account from your list). From then on a
+// transfer between your accounts is just a transfer, and the built-in savings placeholders get nothing.
+function hasOwnSavings() { return Object.keys(SOURCE_ACCOUNTS).some(k => (SOURCE_ROLES[k] ?? 'asset') === 'asset' && !['chase-checking', 'venmo'].includes(k)); }
 
 // What each account stood at on the opening date, worked out from the balances in your statements and any balance you told me. A figure
 // you typed on the Opening screen wins; otherwise this is what the books start from.
@@ -2009,7 +2014,22 @@ function renderAccountsScreen(body) {
           try { state.accounts = setType(state.accounts, key, e.target.value); refresh(`${a.name} is now a ${ACCOUNT_TYPES[e.target.value].toLowerCase()} account.`); } catch (err) { e.target.value = typeOf(key); msg.className = 'msg error'; msg.textContent = err.message; } } },
           ['checking', 'savings', 'investment'].map(t => h('option', { value: t, text: ACCOUNT_TYPES[t], selected: typeOf(key) === t }))),
       under(key),
-      isCustomSource(key) && n === 0 && twoStep('Remove', 'Tap again', () => { state.accounts = state.accounts.filter(x => x.key !== key); refresh(); }, 'btn ghost danger small'));
+      (() => {
+        const custom = isCustomSource(key);
+        if (!custom && n === 0) return null;
+        const b = twoStep(custom ? (n ? `Remove account and its ${plural(n, 'item', 'items')}` : 'Remove account') : `Clear its ${plural(n, 'item', 'items')}`, 'Tap again to confirm', () => {
+          // kept in memory so Undo (on the main screen) brings it all back
+          lastImport = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, opening: state.opening };
+          state.raw = state.raw.filter(t => t.account !== key);
+          state.anchors = state.anchors.filter(x => x.account !== key);
+          const balances = { ...state.opening.balances }; delete balances[`src:${key}`]; state.opening = { ...state.opening, balances };
+          if (custom) state.accounts = state.accounts.filter(x => x.key !== key);
+          $('undo-import').hidden = false; resetGl();
+          refresh(custom ? `${a.name} and everything in it are removed. Upload its statement again whenever you like: if you give it the same name and digits, your coding on those lines comes back.` : `Cleared everything in ${a.name}. Upload its statement again whenever you like.`);
+        }, 'btn ghost danger small');
+        b.id = `acctremove-${key}`;
+        return b;
+      })());
   };
   const one = (() => {
     const nm = h('input', { id: 'acct-new-name', type: 'text', maxlength: '60', placeholder: 'Name', 'aria-label': 'Name of the account' });
@@ -2030,6 +2050,11 @@ function renderAccountsScreen(body) {
     const filed = id => state.txs.filter(t => t.category === id).length;
     const rows = pairs.map(p => h('div', { class: 'acct-row' },
       h('span', { class: 'acct-meta', text: `${p.fromCode} · ${p.fromName} · ${plural(filed(p.from), 'item', 'items')} filed here` }),
+      (() => { const b = twoStep('Remove', 'Tap again to remove for good', () => {
+        state.merged = { ...state.merged, [p.from]: '' }; applyRemoved(state.removed, state.merged);
+        const balances = { ...state.opening.balances }; delete balances[p.from]; state.opening = { ...state.opening, balances };
+        refresh(`${p.fromName} is removed for good. Anything filed under it is now a transfer, and nothing will file to it again.`);
+      }, 'btn ghost danger small'); b.id = `retire-${p.from}`; return b; })(),
       h('label', { class: 'acct-under' }, h('span', { text: 'Same as' }),
         h('select', { id: `matchup-${p.from}`, 'aria-label': `Which statement account ${p.fromName} is` },
           h('option', { value: '', text: 'Leave as it is (no file import yet)', selected: !p.target }),
@@ -2046,9 +2071,9 @@ function renderAccountsScreen(body) {
     }, 'btn');
     go.id = 'matchup-go';
     return h('details', { class: 'fine', id: 'matchup-box', open: true },
-      h('summary', { text: 'Match up my accounts' }),
+      h('summary', { text: 'Accounts not linked to a statement' }),
       h('div', { class: 'stack', style: 'margin-top:8px' },
-        h('p', { class: 'note', text: 'These are accounts you made by hand. Pick the statement account each one is, and the statement account takes over your number, name and place on the balance sheet. Yours is retired (it can come back), and anything you filed under it goes to Transfers so it pairs up with the other side. Make an encrypted backup first, in Settings.' }),
+        h('p', { class: 'note', text: 'These asset accounts are on your books but no statement file feeds them. If one is really a statement account, pick which and tap Match: the statement account takes its number, name and place. If you don’t want it at all, tap Remove: it is gone for good and nothing files to it again. Either way, anything filed under it becomes a transfer. Make an encrypted backup first, in Settings.' }),
         rows, go));
   })();
   body.append(

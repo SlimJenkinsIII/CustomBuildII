@@ -156,6 +156,33 @@ server.listen(0, async () => {
   const bs2 = await page.locator('#fs-bs').textContent();
   check('the Balance Sheet lists it once, under the hand-made name and number', (bs2.match(/Venmo cash/g) ?? []).length === 1 && bs2.includes(mine));
 
+  // the account that kept coming back: a transfer to a savings account whose statement isn't in must not create a "Chase Savings" of its own
+  await page.setInputFiles('#file', [write('Chase1044_Activity_20260310.CSV', HEAD + line('03/10/2026', 'Online Transfer to SAV ...4321 transaction#: 77777', -50))]);
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  await gl();
+  const lone = (await glRows('transaction#: 77777').allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
+  check('a transfer to a savings account with no statement yet is a transfer, not a made-up Chase Savings', lone.length === 1 && /Transfer \(not spending\)/.test(lone[0]) && !/1210 Chase Savings|1010 Chase Savings/.test(lone[0]), lone.join(' | '));
+  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs'); await page.click('#fs-bs .expand-all');
+  const acctCells = (await page.locator('#fs-bs td.acct').allInnerTexts()).map(t => t.replace(/^[▸▾\s]*\d{4}\s*/, '').trim());
+  check('no empty "Chase Savings" placeholder sits on the Balance Sheet next to the real ones', !acctCells.includes('Chase Savings'), acctCells.filter(t => /Savings/.test(t)).join(' | '));
+  // a placeholder can be removed for good
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  await page.click('#retire-save_amex'); await page.click('#retire-save_amex');
+  await page.waitForFunction(() => /removed for good/.test(document.getElementById('settings-body').textContent));
+  check('an asset account not linked to a statement can be removed for good', (await page.locator('#retire-save_amex').count()) === 0);
+  // a statement account can be removed with everything in it, and its statement uploaded again: coding comes back
+  await page.click('#acctremove-savings-1899'); await page.click('#acctremove-savings-1899');
+  await page.waitForFunction(() => /and everything in it are removed/.test(document.getElementById('settings-body').textContent));
+  check('a statement account can be removed with everything in it', (await page.locator('#acctname-savings-1899').count()) === 0);
+  await page.click('#settings-close');
+  await page.setInputFiles('#file', [other]);
+  await page.waitForSelector('#ask-overlay');
+  await page.selectOption('#ask-account', '__new'); await page.selectOption('#ask-kind', 'savings');
+  await page.fill('#ask-name', 'Chase Savings (1899)'); await page.click('#ask-ok');
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  await gl();
+  check('uploading its statement again brings it back as one account, not two', (await glRows('LOYALTY REWARD').allInnerTexts()).filter(t => /Chase Savings \(1899\)/.test(t)).length === 1);
+
   // undo takes the last import back
   await page.setInputFiles('#file', [write('Chase8527_Activity_20260301.CSV', HEAD + line('03/05/2026', 'LOYALTY REWARD', 9.99))]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });

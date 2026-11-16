@@ -6,7 +6,7 @@
 //   free spending       = everything in Free cash categories (refunds reduce it)
 //                         + money-out still in "Needs review" (conservative: counted until you classify it)
 //   effect on savings   = target - spending   (+ means you're adding to savings, - means you're pulling from it)
-import { CATEGORIES } from './categories.js';
+import { CATEGORIES, SOURCE_ACCOUNTS, isRemoved } from './categories.js';
 import { cleanPay, savingsByAccount } from './paycheck.js';
 
 const PLANNED_GROUPS = new Set(['fixed', 'subscriptions', 'onetime', 'savings']);
@@ -38,10 +38,14 @@ export function validatePlan(plan) {
   }
 }
 
+// Only accounts that still exist count: remove an account and its target stops coming out of free cash; add one and it can have a target.
+export const liveTargets = plan => Object.fromEntries(Object.entries(plan.accounts ?? {}).filter(([k]) => SOURCE_ACCOUNTS[k.slice(4)]));
+export const livePlanned = plan => Object.fromEntries(Object.entries(plan.planned ?? {}).filter(([id]) => CATEGORIES[id] && !isRemoved(id)));
+
 export function plannedFreeCash(plan) {
   validatePlan(plan);
-  return plan.income - (plan.vacation ?? 0) - Object.values(plan.planned ?? {}).reduce((a, b) => a + b, 0)
-    - Object.values(plan.accounts ?? {}).reduce((a, b) => a + b, 0);       // savings targets for your own accounts
+  return plan.income - (plan.vacation ?? 0) - Object.values(livePlanned(plan)).reduce((a, b) => a + b, 0)
+    - Object.values(liveTargets(plan)).reduce((a, b) => a + b, 0);       // savings targets for your own accounts
 }
 
 export function targetForRange(plan, startIso, days) {
@@ -96,7 +100,7 @@ export function monthSummary(transactions, plan, ym) {
   const sumGroup = (group, sign) => inMonth
     .filter(t => CATEGORIES[t.category].group === group)
     .reduce((s, t) => s + sign * t.cents, 0);
-  const plannedOf = group => Object.entries(plan.planned ?? {})
+  const plannedOf = group => Object.entries(livePlanned(plan))
     .filter(([id]) => CATEGORIES[id].group === group).reduce((s, [, c]) => s + c, 0);
   const spent = inMonth.reduce((s, t) => s + freeSpend(t), 0);
   return {
@@ -107,7 +111,7 @@ export function monthSummary(transactions, plan, ym) {
     onetime: { planned: plannedOf('onetime'), actual: sumGroup('onetime', -1) },
     vacation: { planned: plan.vacation ?? 0, actual: sumGroup('vacation', -1) },
     savings: (() => {
-      const byAccount = savingsByAccount(transactions, plan.accounts, ym);
+      const byAccount = savingsByAccount(transactions, liveTargets(plan), ym);
       return { planned: plannedOf('savings') + byAccount.reduce((s, a) => s + a.planned, 0), actual: sumGroup('savings', -1) + byAccount.reduce((s, a) => s + a.actual, 0), byAccount };
     })(),
     free: { planned: free, actual: spent, effect: free - spent },

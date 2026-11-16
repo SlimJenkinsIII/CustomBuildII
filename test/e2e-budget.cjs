@@ -59,6 +59,31 @@ server.listen(0, async () => {
   check('savings are tracked from what moved into the account', /\$400 of \$500/.test(await page.textContent('#m-save-savings-8527')), await page.textContent('#m-save-savings-8527'));
   check('the verdict is free cash against spending', /under free cash|over free cash/.test(card));
 
+  // the plan reads in order: income, then savings account by account, then fixed bills
+  const planText = await page.textContent('#plan-body');
+  const at = t => planText.indexOf(t);
+  check('savings comes straight after income, before fixed bills', at('1. Income') >= 0 && at('1. Income') < at('2. Savings') && at('2. Savings') < at('3. Fixed'), [at('1. Income'), at('2. Savings'), at('3. Fixed')].join(','));
+  check('the 401(k) is shown as savings already taken out of pay', /401\(k\): \$867 a month/.test(await page.textContent('#plan-401k')), await page.textContent('#plan-401k'));
+  check('Month in review lists each savings account right after income', /2\. Savings, account by account/.test(await page.textContent('#monthcard')));
+
+  // add an account (even one marked Checking): it shows up in the plan; give it a target; remove it and the target stops counting
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  await page.locator('#settings-body summary', { hasText: 'Add one account' }).click();
+  await page.fill('#acct-new-name', 'Emergency fund (7777)'); await page.selectOption('#acct-new-kind', 'checking'); await page.fill('#acct-new-last4', '7777');
+  await page.click('#acct-new-add');
+  await page.waitForFunction(() => /Added Emergency fund/.test(document.getElementById('settings-body').textContent));
+  await page.click('#settings-close');
+  await page.click('#tab-budget');
+  check('an account you add appears in the savings part of the plan', (await page.locator('#plan-acct-checking-7777').count()) === 1);
+  await page.fill('#plan-acct-checking-7777', '100'); await page.press('#plan-acct-checking-7777', 'Tab');
+  check('its target comes out of free cash', /Free cash: \$1,900 a month/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  await page.click('#acctremove-checking-7777'); await page.click('#acctremove-checking-7777');
+  await page.waitForFunction(() => /are removed/.test(document.getElementById('settings-body').textContent));
+  await page.click('#settings-close');
+  await page.click('#tab-budget');
+  check('remove the account and it leaves the plan, and its target stops counting', (await page.locator('#plan-acct-checking-7777').count()) === 0 && /Free cash: \$2,000 a month/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
+
   check('no errors', problems.length === 0, JSON.stringify(problems));
   await browser.close(); server.close();
   console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

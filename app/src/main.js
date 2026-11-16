@@ -1155,7 +1155,7 @@ function renderHabits(d) {
 // Phase 1 of the month: what came in, the bonus part on its own, the 401(k), and savings by account.
 function phaseOne(m) {
   const row = (label, actual, planned, id) => [h('span', { text: label }), h('span', { id, text: planned === null ? money(actual) : `${money(actual)} of ${money(planned)}` })];
-  const out = [h('h3', { class: 'set-h', text: '1. Pay and savings' })];
+  const out = [h('h3', { class: 'set-h', text: '1. Income' })];
   const rows = [];
   if (plan.pay) {
     const inc = monthIncome(state.txs, plan.pay, state.ym);
@@ -1170,10 +1170,20 @@ function phaseOne(m) {
     out.push(h('div', { class: 'plan-rows' }, row('Paycheck', m.income.actual, m.income.planned, 'm-pay')));
     out.push(h('p', { class: 'note', text: 'Add your pay details in the plan (one ordinary paystub) and I’ll read every paycheck: normal, bonus, and your 401(k) up to the yearly limit.' }));
   }
-  const acc = m.savings.byAccount ?? [];
+  // every account, in number order, with what you planned and what moved into it this month
+  const moved = new Map((m.savings.byAccount ?? []).map(a => [a.key, a.actual]));
+  const inMonth = state.txs.filter(t => t.date.startsWith(state.ym));
+  const actualOf = a => (a.account
+    ? (moved.get(a.key) ?? inMonth.filter(t => t.account === a.account && t.category === 'transfer').reduce((s2, t) => s2 + t.cents, 0))
+    : -inMonth.filter(t => t.category === a.key).reduce((s2, t) => s2 + t.cents, 0));
+  const plannedOf = a => (a.account ? plan.accounts?.[a.key] : plan.planned?.[a.key]) ?? 0;
+  const list = savingsTargets();
+  const tp = list.reduce((s2, a) => s2 + plannedOf(a), 0), ta = list.reduce((s2, a) => s2 + actualOf(a), 0);
+  out.push(h('h3', { class: 'set-h', text: '2. Savings, account by account' }));
   out.push(h('div', { class: 'plan-rows', id: 'm-savings' },
-    acc.length ? acc.flatMap(a => row(`Into ${SOURCE_ACCOUNTS[a.key.slice(4)]?.name ?? a.key}`, a.actual, a.planned, `m-save-${a.key.slice(4)}`))
-      : row('Savings moved', m.savings.actual, m.savings.planned, 'm-save')));
+    list.flatMap(a => row(`${a.code} ${a.name}`, actualOf(a), plannedOf(a), `m-save-${a.account ?? a.key}`)),
+    list.length > 1 ? row('Total moved to savings', ta, tp, 'm-save-total') : []));
+  if (!list.length) out.push(h('p', { class: 'note', text: 'Add your savings and investment accounts in Settings → Accounts and they appear here.' }));
   return out;
 }
 
@@ -1194,12 +1204,12 @@ function renderMonth(asOf, keepFocus) {
       ? `Spent ${money(p.spent)} of ${money(p.free)} free cash. The month finished ${money(Math.abs(p.left))} ${over ? 'over' : 'under'}.`
       : `Month still in progress: ${money(p.spent)} spent so far, out of ${money(p.free)} for the whole month.` }),
     phaseOne(m),
-    h('h3', { class: 'set-h', text: '2. Fixed bills' }),
+    h('h3', { class: 'set-h', text: '3. Fixed bills' }),
     h('div', { class: 'plan-rows' },
       row('Fixed bills', m.fixed), row('Subscriptions', m.subscriptions),
       row('One-time & annual set-aside', m.onetime),
       (m.vacation.planned > 0 || m.vacation.actual > 0) && row('Vacation set-aside', m.vacation)),
-    h('p', { class: 'note', text: '3. Free cash is the verdict at the top: what was left after your pay, savings and fixed bills, against what you spent on everything else.' }));
+    h('p', { class: 'note', text: '4. Free cash is the verdict at the top: what was left after your pay, savings and fixed bills, against what you spent on everything else.' }));
   if (keepFocus) $('month').focus();
 }
 
@@ -1741,6 +1751,18 @@ const guard = (msgEl, fn) => async (...args) => {
   try { await fn(...args); } catch (err) { msgEl.className = 'msg error'; msgEl.textContent = err.message; }
 };
 
+// Every account money can be put away in, straight from your account list: each asset account except the one your pay lands in,
+// plus any savings account you made by hand. Add or remove an account and this list (and the budget) follows.
+function savingsTargets() {
+  const payInto = new Set(state.txs.filter(t => t.category === 'income_paycheck' && t.cents > 0).map(t => t.account));
+  if (!payInto.size) payInto.add('chase-checking');
+  const fromList = Object.keys(SOURCE_ACCOUNTS).filter(k => (SOURCE_ROLES[k] ?? 'asset') === 'asset' && !payInto.has(k))
+    .map(k => ({ key: `src:${k}`, account: k, code: SOURCE_ACCOUNTS[k].code, name: SOURCE_ACCOUNTS[k].name }));
+  const byHand = Object.values(CATEGORIES).filter(c => c.group === 'savings' && !isRemoved(c.id) && !hasKids(c.id) && (c.custom || plan.planned?.[c.id]))
+    .map(c => ({ key: c.id, code: c.code, name: c.name }));
+  return [...fromList, ...byHand].sort((a, b) => a.code.localeCompare(b.code));
+}
+
 function planFieldDefs() {
   const idsIn = g => Object.values(CATEGORIES).filter(c => c.group === g && !isRemoved(c.id)).sort((a, b) => a.code.localeCompare(b.code));
   const planned = cat => ({
@@ -1750,13 +1772,12 @@ function planFieldDefs() {
   });
   return [
     ...(plan.pay ? [] : [{ heading: 'Take-home pay each month', fields: [{ id: 'income', label: 'After tax and 401(k)', get: () => plan.income, set: (p, c) => { p.income = c; } }] }]),
-    { heading: 'Savings: what you move into each account each month', fields: Object.keys(SOURCE_ACCOUNTS).filter(k => ['savings', 'investment'].includes(typeOf(k)))
-      .sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(k => ({
-        id: `acct-${k}`, label: `${SOURCE_ACCOUNTS[k].code} ${SOURCE_ACCOUNTS[k].name}`,
-        get: () => plan.accounts?.[`src:${k}`] ?? 0,
-        set: (p, c) => { p.accounts = p.accounts ?? {}; if (c) p.accounts[`src:${k}`] = c; else delete p.accounts[`src:${k}`]; },
-      })) },
-    ...[['fixed', 'Fixed monthly expenses'], ['subscriptions', 'Subscriptions'], ['onetime', 'Set aside for one-time purchases & annual fees'], ['savings', 'Savings & investing moved each month']]
+    { heading: '2. Savings: where each dollar goes, account by account', fields: savingsTargets().map(a => (a.account ? {
+        id: `acct-${a.account}`, label: `${a.code} ${a.name}`,
+        get: () => plan.accounts?.[a.key] ?? 0,
+        set: (p, c) => { p.accounts = p.accounts ?? {}; if (c) p.accounts[a.key] = c; else delete p.accounts[a.key]; },
+      } : planned(CATEGORIES[a.key]))) },
+    ...[['fixed', '3. Fixed monthly expenses'], ['subscriptions', 'Subscriptions'], ['onetime', 'Set aside for one-time purchases & annual fees']]
       .map(([g, heading]) => ({ heading, fields: idsIn(g).map(planned) })),
     { heading: 'Vacations', fields: [{ id: 'vacation', label: 'Set aside for trips each month', get: () => plan.vacation ?? 0, set: (p, c) => { p.vacation = c; } }] },
   ];
@@ -1806,7 +1827,7 @@ function renderPlan() {
   const num = (id, label, value, hint) => [h('label', { for: id, text: label }), h('input', { id, type: 'text', inputmode: 'decimal', value, placeholder: hint ?? '' }), h('span', { class: 'pct' })];
   const pctText = bp => (bp ? String(bp / 100) : '');
   const payForm = h('div', { class: 'field-grid plan', id: 'pay-form' },
-    h('h3', { class: 'set-h', text: '1. Your pay (from one ordinary paystub)' }),
+    h('h3', { class: 'set-h', text: '1. Income: your pay (from one ordinary paystub)' }),
     h('label', { for: 'pay-every', text: 'Paid' }),
     h('select', { id: 'pay-every' }, Object.keys(PAY_EVERY).map(k => h('option', { value: k, text: { weekly: 'Every week', biweekly: 'Every two weeks', semimonthly: 'Twice a month', monthly: 'Monthly' }[k], selected: (pay.every ?? 'biweekly') === k }))), h('span'),
     ...num('pay-gross', 'Gross pay per paycheck', pay.gross ? dollars(pay.gross) : ''),
@@ -1828,6 +1849,7 @@ function renderPlan() {
   fill($('plan-body'),
     h('p', { class: 'sub', style: 'margin:4px 0 10px', text: 'Three steps: your pay and what you save first, then fixed bills, and whatever is left is free cash. Free cash sets your weekly and monthly target, and that is the verdict: over or under. Type dollars, or a percentage of take-home like 15%.' }),
     payForm, h('div', { class: 'row-form' }, savePay, clearPay), payMsg,
+    plan.pay && h('p', { class: 'note', id: 'plan-401k', text: `401(k): ${money(Math.round(Math.round(plan.pay.gross * plan.pay.pct / 10000) * PAY_EVERY[plan.pay.every] / 12))} a month comes out before your pay reaches the bank${plan.pay.match ? `, plus ${money(Math.round(Math.round(plan.pay.gross * plan.pay.match / 10000) * PAY_EVERY[plan.pay.every] / 12))} from your employer` : ''}. It is savings too, already taken care of.` }),
     plan.pay && h('p', { class: 'note', text: `Usual take-home: ${money(plan.income)} a month. A paycheck bigger than usual is read as a bonus: it is shown on its own as extra cash for you to use, and doesn’t change your free cash.` }),
     h('div', { class: 'field-grid plan' }, rows),
     h('p', { class: 'free-line', id: 'plan-summary', style: 'margin-top:10px' }));
@@ -2127,6 +2149,8 @@ function renderAccountsScreen(body) {
       if (dup) { msg.className = 'msg error'; msg.textContent = `Two of your accounts are set to the same statement account (${SOURCE_ACCOUNTS[dup.target].name}). Pick one each.`; return; }
       if (!chosen.length) { msg.className = 'msg error'; msg.textContent = 'Nothing is matched yet. Pick the statement account for at least one.'; return; }
       const next = applyMatchup(state, chosen);
+      // the amount you planned for the hand-made account moves with it to the statement account
+      if (chosen.some(x => plan.planned?.[x.from])) changePlan(p => { for (const x of chosen) if (p.planned?.[x.from]) { p.accounts = p.accounts ?? {}; p.accounts[`src:${x.target}`] = (p.accounts[`src:${x.target}`] ?? 0) + p.planned[x.from]; delete p.planned[x.from]; } });
       state.merged = next.merged; applyRemoved(state.removed, state.merged);
       state.coding = next.coding; state.names = next.names; state.parents = next.parents; state.overrides = next.overrides; state.learned = next.learned; state.opening = next.opening;
       refresh(`Matched ${plural(chosen.length, 'account', 'accounts')}. Each statement account now has your number and name, and what was filed under yours goes to Transfers.`);

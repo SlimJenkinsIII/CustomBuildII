@@ -317,7 +317,11 @@ server.listen(0, async () => {
   check('Balances is the default TB view, with an Opening column', /Opening/.test(await page.locator('#fs-tb thead').textContent()) && /Dec 31, 2025/.test(await page.locator('#fs-tb thead').textContent()));
   check('no nudge to type opening balances: they are worked out from the running balance in the Chase file', !/No opening balances yet/.test(await page.locator('#fs-tb').textContent()));
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Opening balances' }).click();
-  check('the Opening screen says how the checking balance was worked out', /Worked out from your statements/.test(await page.textContent('#open-note-chase-checking')), await page.textContent('#open-note-chase-checking'));
+  check('the Opening screen says how the checking balance was worked out', /Worked back from your statements/.test(await page.textContent('#open-note-chase-checking')), await page.textContent('#open-note-chase-checking'));
+  await page.fill('#open-src-chase-checking', '1.00'); await page.press('#open-src-chase-checking', 'Tab');
+  check('a figure you type is compared with the worked-back one, and says by how much it differs', /You entered \$1, which is .* (more|less)\. The books start from your figure/.test(await page.textContent('#open-note-chase-checking')), await page.textContent('#open-note-chase-checking'));
+  await page.click('#use-worked-chase-checking');
+  check('one tap goes back to the worked-back figure', /This is what the books start from/.test(await page.textContent('#open-note-chase-checking')) && (await page.inputValue('#open-src-chase-checking')) === '');
   check('and a card with no balance in its file asks for one you know', /No balance in the statements yet/.test(await page.textContent('#open-note-amex')));
   await page.fill('#known-amt-amex', '500'); await page.click('#known-go-amex');
   await page.waitForFunction(() => /the balance you gave me/.test(document.getElementById('open-note-amex').textContent));

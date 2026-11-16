@@ -2069,12 +2069,17 @@ function renderOpeningScreen(body) {
     const id = `open-${a.key.replace(':', '-')}`, d = found[a.key], account = a.key.slice(4);
     const typed = state.opening.balances[a.key];
     const bad = d?.checks.filter(c => !c.ok) ?? [];
-    const note = d
-      ? (d.cents <= 0 ? `Worked out from your statements: ${money(d.cents)}. I can only start an account at a positive balance, so it starts at zero.`
-        : `Worked out from ${d.kind === 'entered' ? 'the balance you gave me' : 'your statements'} (${fmtFull(d.from)}): ${money(d.cents)}.`
-          + (bad.length ? ` The balance on ${fmtFull(bad[0].date)} is ${money(Math.abs(bad[0].off))} ${bad[0].off < 0 ? 'lower' : 'higher'} than the transactions explain, so a transaction or statement is probably missing around then.`
-            : d.checks.length ? ` It agrees with ${plural(d.checks.length, 'later balance', 'later balances')}, so nothing is missing.` : ''))
-      : 'No balance in the statements yet. Tell me one you know, such as the latest statement balance, and I will work back.';
+    const from = d ? `${d.kind === 'entered' ? 'the balance you gave me' : 'your statements'} (${fmtFull(d.from)})` : '';
+    const worked = d && d.cents > 0 ? d.cents : null;
+    const check = bad.length ? ` The balance on ${fmtFull(bad[0].date)} is ${money(Math.abs(bad[0].off))} ${bad[0].off < 0 ? 'lower' : 'higher'} than the transactions explain, so a transaction or statement is probably missing around then.`
+      : d?.checks.length ? ` It agrees with ${plural(d.checks.length, 'later balance', 'later balances')}, so nothing is missing.` : '';
+    let compare;
+    if (!d) compare = 'No balance in the statements yet. Tell me one you know, such as the latest statement balance, and I will work back.';
+    else if (worked === null) compare = `Worked back from ${from}: ${money(d.cents)}. I can only start an account at a positive balance, so it starts at zero.`;
+    else if (!typed) compare = `Worked back from ${from}: ${money(worked)}. This is what the books start from. Type your own figure to compare.${check}`;
+    else if (typed === worked) compare = `Worked back from ${from}: ${money(worked)}. ✓ It matches what you entered.${check}`;
+    else compare = `Worked back from ${from}: ${money(worked)}. You entered ${money(typed)}, which is ${money(Math.abs(typed - worked))} ${typed > worked ? 'more' : 'less'}. The books start from your figure.${check}`;
+    const note = compare;
     const known = d && d.kind !== 'entered' && !bad.length ? [] : [h('div', { class: 'row-form', style: 'grid-column:1/-1' },
       h('input', { id: `known-date-${account}`, type: 'date', 'aria-label': `Date of a balance you know for ${a.name}`, value: state.txs.filter(t => t.account === account).map(t => t.date).sort().pop() ?? '' }),
       h('input', { id: `known-amt-${account}`, type: 'text', inputmode: 'decimal', placeholder: a.side === 'asset' ? 'What it had' : 'What you owed', 'aria-label': `The balance on that date for ${a.name}` }),
@@ -2087,7 +2092,7 @@ function renderOpeningScreen(body) {
         } catch { msg.className = 'msg error'; msg.textContent = 'Pick the date and type the balance on it, like 1,250.00.'; }
       } }))];
     return [h('label', { for: id, text: `${a.code} ${a.name}` }),
-      h('input', { id, type: 'text', inputmode: 'decimal', placeholder: d && d.cents > 0 ? dollars(d.cents) : '', value: typed ? dollars(typed) : '', onchange: e => {
+      h('input', { id, type: 'text', inputmode: 'decimal', placeholder: d && d.cents > 0 ? `${dollars(d.cents)} worked back` : '', value: typed ? dollars(typed) : '', onchange: e => {
         try {
           const c = e.target.value.trim() === '' ? 0 : toCents(e.target.value);
           if (c < 0) throw new Error('negative');
@@ -2097,12 +2102,17 @@ function renderOpeningScreen(body) {
           e.target.value = c ? dollars(c) : ''; e.target.classList.remove('bad'); msg.textContent = ''; save();
         } catch { e.target.classList.add('bad'); msg.className = 'msg error'; msg.textContent = 'Enter an amount like 1,250.00. Use a positive number for what you have and for what you owe.'; }
       } }),
-      h('p', { class: 'note open-note', id: `open-note-${account}`, style: 'grid-column:1/-1;margin:0', text: note }), ...known];
+      h('p', { class: 'note open-note', id: `open-note-${account}`, style: 'grid-column:1/-1;margin:0', text: note }),
+      ...(typed && worked !== null && typed !== worked ? [h('div', { class: 'row-form', style: 'grid-column:1/-1' },
+        h('button', { type: 'button', class: 'btn ghost small', id: `use-worked-${account}`, text: `Use ${money(worked)} instead`, onclick: () => {
+          const balances = { ...state.opening.balances }; delete balances[a.key]; state.opening = { ...state.opening, balances }; save();
+        } }))] : []),
+      ...known];
   };
   const accounts = openingAccounts();
   update();
   body.append(
-    h('p', { class: 'sub', text: 'Where each account stood at the end of your opening date. You don’t have to type these: I work them out from the balances in your statements (Chase bank and Venmo files carry them) less what moved since. For a card, tell me one balance you know and I work back. Typing a figure here overrides mine.' }),
+    h('p', { class: 'sub', text: 'Where each account stood at the end of your opening date. You don’t have to type these: I work each one back from the balances in your statements (Chase bank and Venmo files carry them) less what moved since, and show it next to the figure you type, so you can check the two agree, once, whenever you add an account. If you disagree, your figure is the one used. For a card, tell me one balance you know and I work back.' }),
     h('div', { class: 'row-form', style: 'margin:10px 0' },
       h('label', { for: 'open-date', text: 'Opening date', style: 'font-size:14px' }),
       h('input', { id: 'open-date', type: 'date', value: state.opening.date, onchange: e => {

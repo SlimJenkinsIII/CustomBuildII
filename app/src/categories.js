@@ -133,6 +133,12 @@ export const BUILTIN_SOURCES = ['chase-checking', 'chase-card', 'amex', 'venmo']
 export const DEFAULT_OF_FAMILY = { 'chase-bank': 'chase-checking', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' };
 const FAMILY_OF = { 'chase-checking': 'chase-bank', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' };
 const LAST4 = {};
+// What kind of account each is, as you'd name it. Built-in ones have a kind of their own; you can change an asset's kind.
+export const ACCOUNT_TYPES = { checking: 'Checking', savings: 'Savings', investment: 'Investment', card: 'Credit card', venmo: 'Venmo' };
+const DEFAULT_TYPE = { 'chase-checking': 'checking', 'chase-card': 'card', amex: 'card', venmo: 'venmo' };
+const TYPE = {};
+export const typeOf = key => TYPE[key] ?? DEFAULT_TYPE[key] ?? (SOURCE_ROLES[key] === 'liability' ? 'card' : 'checking');
+export const roleOfType = type => (type === 'card' ? 'liability' : 'asset');
 export const familyOf = key => FAMILY_OF[key];
 export const last4Of = key => LAST4[key] ?? '';
 export const familyForFormat = format => ({ 'chase-checking': 'chase-bank', 'chase-card': 'chase-card', amex: 'amex', venmo: 'venmo' })[format];
@@ -147,8 +153,10 @@ export function applyAccountList(accounts = []) {
     delete DEFAULT_SOURCE_CODES[`src:${k}`]; delete DEFAULT_NAMES[`src:${k}`];
   }
   for (const k of Object.keys(LAST4)) delete LAST4[k];
+  for (const k of Object.keys(TYPE)) delete TYPE[k];
   for (const a of accounts) {
     if (a.last4) LAST4[a.key] = a.last4;
+    if (a.type && ACCOUNT_TYPES[a.type]) TYPE[a.key] = a.type;
     if (BUILTIN_SOURCES.includes(a.key)) continue;
     SOURCE_ACCOUNTS[a.key] = { code: a.code, name: a.name, custom: true };
     SOURCE_ROLES[a.key] = a.role; FAMILY_OF[a.key] = a.family;

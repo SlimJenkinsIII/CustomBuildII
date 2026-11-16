@@ -4,14 +4,14 @@ import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
 import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
-import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, addAccountOfFamily } from './accounts.js';
+import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, setType, addAccountOfType } from './accounts.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
 import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { suggestPairs, applyMatchup, cleanMerged } from './matchup.js';
-import { SOURCE_ROLES, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
+import { SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -100,27 +100,37 @@ function recompute() {
 
 // A file names its account by the last four digits. When the name settles it, nothing is asked; when it can't (digits you haven't set
 // up, or several accounts of one kind), a small window asks once, and what you answer is remembered for next time.
-function askAccount({ fileName, family, digits }) {
+// Which of your accounts a file can go into: a Venmo file only into Venmo, a bank file into any asset account, a card file into any card.
+const accountsForFormat = format => Object.keys(SOURCE_ACCOUNTS).filter(k => (format === 'venmo' ? typeOf(k) === 'venmo'
+  : format === 'chase-checking' ? (SOURCE_ROLES[k] ?? 'asset') === 'asset' && typeOf(k) !== 'venmo' : SOURCE_ROLES[k] === 'liability'))
+  .sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code));
+const kindOfFile = format => (format === 'venmo' ? 'Venmo' : format === 'chase-checking' ? 'bank account' : 'credit card');
+
+// A file names its account by the last four digits. When the name settles it, nothing is asked; otherwise a small window asks which of
+// your accounts it is, and what you answer is remembered (the digits are saved on that account) for next time.
+function askAccount({ fileName, format, digits }) {
   return new Promise(resolve => {
-    const options = accountKeysOfFamily(family);
+    const options = accountsForFormat(format);
+    const kinds = Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo' && (format === 'chase-checking' ? k !== 'card' : k === 'card'));
     const pick = h('select', { id: 'ask-account', 'aria-label': 'Account' },
       options.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].name}${last4Of(k) ? ` (${last4Of(k)})` : ''}` })),
-      h('option', { value: '__new', text: 'A new account…' }));
+      format === 'venmo' ? [] : h('option', { value: '__new', text: 'A new account…' }));
     const nm = h('input', { id: 'ask-name', type: 'text', maxlength: '60', placeholder: 'Name, like Chase Savings', 'aria-label': 'Name of the new account' });
+    const kind = h('select', { id: 'ask-kind', 'aria-label': 'Kind of account' }, kinds.map(([k, label]) => h('option', { value: k, text: label })));
     const l4 = h('input', { id: 'ask-last4', type: 'text', inputmode: 'numeric', maxlength: '4', value: digits[0] ?? '', placeholder: 'Last 4 digits', 'aria-label': 'Last 4 digits' });
-    const fields = h('div', { class: 'row-form', hidden: true }, nm, l4);
+    const fields = h('div', { class: 'row-form', hidden: true }, nm, kind, l4);
     pick.addEventListener('change', () => { fields.hidden = pick.value !== '__new'; });
     const msg = h('p', { class: 'msg', role: 'status' });
     const done = value => { overlay.remove(); resolve(value); };
     const overlay = h('div', { class: 'overlay', id: 'ask-overlay' }, h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
       h('h2', { id: 'ask-title', text: 'Which account is this file?' }),
-      h('p', { class: 'sub', text: `${fileName} looks like a ${FAMILIES[family].toLowerCase()} statement.${digits.length ? ` Its name has ${digits.join(' and ')} in it, which isn't one of your accounts yet.` : ''} Pick the account it belongs to and I'll remember it.` }),
+      h('p', { class: 'sub', text: `${fileName} looks like a ${kindOfFile(format)} statement.${digits.length ? ` Its name has ${digits.join(' and ')} in it, which isn't one of your accounts yet.` : ''} Pick the account it belongs to and I'll remember it.` }),
       pick, fields, msg,
       h('div', { class: 'row-form' },
         h('button', { type: 'button', class: 'btn', id: 'ask-ok', text: 'Use this account', onclick: () => {
           try {
             if (pick.value === '__new') {
-              const out = addAccountOfFamily(state.accounts, { name: nm.value, family, last4: l4.value }, state.coding);
+              const out = addAccountOfType(state.accounts, { name: nm.value, type: kind.value, last4: l4.value }, state.coding);
               done({ accounts: out.accounts, key: out.key });
             } else {
               const keep = digits.find(d => !last4Of(pick.value) && !state.accounts.some(a => a.last4 === d));   // remember the digits for this account
@@ -134,18 +144,20 @@ function askAccount({ fileName, family, digits }) {
   });
 }
 
-// Which of your accounts a file belongs to: by its digits, else the only account of that kind, else ask.
+// Which of your accounts a file belongs to: by its digits, else the only account it could be, else ask.
 async function accountForUpload(file, format) {
-  const family = familyForFormat(format);
+  const options = accountsForFormat(format);
   const named = accountForFile(file.name);
   if (named) {
-    if (familyOf(named) !== family) throw new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which is a different kind of account than this file.`);
+    if (!options.includes(named)) throw new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which can't take this kind of file (${kindOfFile(format)}).`);
     return { key: named };
   }
-  const options = accountKeysOfFamily(family);
   const digits = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));              // years in a name are not account digits
-  if (options.length === 1 && (family === 'venmo' || !digits.length)) return { key: options[0] };
-  const answer = await askAccount({ fileName: file.name, family, digits });
+  if (options.length === 1 && (format === 'venmo' || !digits.length)) return { key: options[0] };
+  // with no digits to go by, a file of a kind that only one of your accounts is (the one Amex card, the one Chase card) needs no question
+  const ofKind = options.filter(k => familyOf(k) === familyForFormat(format));
+  if (!digits.length && ofKind.length === 1) return { key: ofKind[0] };
+  const answer = await askAccount({ fileName: file.name, format, digits });
   return answer ? { key: answer.key, accounts: answer.accounts } : null;
 }
 
@@ -165,7 +177,7 @@ async function importFiles(files) {
       if (!where) { left.push(file.name); continue; }
       if (where.accounts) { state.accounts = where.accounts; recompute(); }
       parsed = parseStatement(text, where.key);
-      const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyOf(where.key)]);
+      const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyForFormat(parsed.format)]);
       state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; moved += r.movedCount;
       if (r.movedCount) movedInto.add(SOURCE_ACCOUNTS[where.key].name);
       wentInto.set(SOURCE_ACCOUNTS[where.key].name, (wentInto.get(SOURCE_ACCOUNTS[where.key].name) ?? 0) + r.addedCount + r.movedCount);
@@ -1935,7 +1947,6 @@ function renderAccountsScreen(body) {
         r.claimed.length && `Linked ${plural(r.claimed.length, 'account', 'accounts')} to the ones already there (everything imported stays with them).`,
         r.created.length && `Added ${r.created.join(', ')}.`,
         r.skipped.length && `Already set up: ${r.skipped.join(', ')}.`,
-        r.unsupported.length && `No file import for these yet, so I left them alone: ${r.unsupported.join(', ')}.`,
       ].filter(Boolean);
       refresh(parts.join(' ') || 'Nothing to add.');
     } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
@@ -1965,16 +1976,20 @@ function renderAccountsScreen(body) {
         onchange: e => { try { state.names = setName(state.names, `src:${key}`, e.target.value); refresh(); } catch (err) { e.target.value = a.name; msg.className = 'msg error'; msg.textContent = err.message; } } }),
       h('input', { id: `acctdig-${key}`, type: 'text', inputmode: 'numeric', maxlength: '4', value: last4Of(key), placeholder: 'Last 4', class: 'last4', 'aria-label': `Last 4 digits of ${a.name}`,
         onchange: e => { try { state.accounts = setLast4(state.accounts, key, e.target.value); refresh(); } catch (err) { e.target.value = last4Of(key); msg.className = 'msg error'; msg.textContent = err.message; } } }),
-      h('span', { class: 'acct-meta', text: `${a.code} · ${FAMILIES[familyOf(key)]?.split(' (')[0] ?? ''} · ${plural(n, 'item', 'items')}` }),
+      h('span', { class: 'acct-meta', text: `${a.code} · ${plural(n, 'item', 'items')}` }),
+      typeOf(key) === 'venmo' || SOURCE_ROLES[key] === 'liability' ? h('span', { class: 'acct-kind', text: ACCOUNT_TYPES[typeOf(key)] })
+        : h('select', { id: `accttype-${key}`, class: 'acct-kind', 'aria-label': `Kind of account for ${a.name}`, onchange: e => {
+          try { state.accounts = setType(state.accounts, key, e.target.value); refresh(`${a.name} is now a ${ACCOUNT_TYPES[e.target.value].toLowerCase()} account.`); } catch (err) { e.target.value = typeOf(key); msg.className = 'msg error'; msg.textContent = err.message; } } },
+          ['checking', 'savings', 'investment'].map(t => h('option', { value: t, text: ACCOUNT_TYPES[t], selected: typeOf(key) === t }))),
       under(key),
       isCustomSource(key) && n === 0 && twoStep('Remove', 'Tap again', () => { state.accounts = state.accounts.filter(x => x.key !== key); refresh(); }, 'btn ghost danger small'));
   };
   const one = (() => {
     const nm = h('input', { id: 'acct-new-name', type: 'text', maxlength: '60', placeholder: 'Name', 'aria-label': 'Name of the account' });
-    const kind = h('select', { id: 'acct-new-kind', 'aria-label': 'Kind of account' }, Object.entries(FAMILIES).map(([k, label]) => h('option', { value: k, text: label })));
+    const kind = h('select', { id: 'acct-new-kind', 'aria-label': 'Kind of account' }, Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo').map(([k, label]) => h('option', { value: k, text: label })));
     const dg = h('input', { id: 'acct-new-last4', type: 'text', inputmode: 'numeric', maxlength: '4', placeholder: 'Last 4', 'aria-label': 'Last 4 digits' });
     return h('div', { class: 'row-form' }, nm, kind, dg, h('button', { type: 'button', class: 'btn', id: 'acct-new-add', text: 'Add', onclick: () => {
-      try { state.accounts = addAccountOfFamily(state.accounts, { name: nm.value, family: kind.value, last4: dg.value }, state.coding).accounts; refresh(`Added ${nm.value.trim()}.`); }
+      try { state.accounts = addAccountOfType(state.accounts, { name: nm.value, type: kind.value, last4: dg.value }, state.coding).accounts; refresh(`Added ${nm.value.trim()}.`); }
       catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     } }));
   })();
@@ -2010,14 +2025,14 @@ function renderAccountsScreen(body) {
         rows, go));
   })();
   body.append(
-    h('p', { class: 'sub', text: 'Each statement file is matched to an account by the last four digits in its name, like Chase1044_Activity.CSV. Set the digits once and every upload goes to the right account. If a file’s digits aren’t set up, I’ll ask you once.' }),
+    h('p', { class: 'sub', text: 'List every account you have, assets (Checking, Savings, Investment) and credit cards. Each statement file goes to the account whose last four digits are in its name, like Chase1044_Activity.CSV. If the name doesn’t settle it, I’ll ask which account it is, once, and remember.' }),
     h('h3', { class: 'set-h', text: 'Your accounts' }),
     h('div', { id: 'acct-list' }, Object.keys(SOURCE_ACCOUNTS).sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code)).map(row)),
     matchPanel,
     h('details', { class: 'fine', id: 'acct-paste-box', open: !state.accounts.some(a => a.last4) },
       h('summary', { text: 'Paste a list of accounts' }),
       h('div', { class: 'stack', style: 'margin-top:8px' },
-        h('p', { class: 'note', text: 'One per line, with the last four digits in brackets. I work out the kind from the words. The first checking account, card and so on takes over the one already here, so nothing already imported is lost; the rest are added.' }),
+        h('p', { class: 'note', text: 'One per line, with the last four digits in brackets, like Chase Savings (8527). I work out the kind from the words (you can change it afterwards). The first checking account and card take over the ones already here, so nothing already imported is lost; every other line becomes its own account.' }),
         paste, h('button', { type: 'button', class: 'btn', id: 'acct-paste-go', text: 'Set up these accounts', onclick: addAll }))),
     h('details', { class: 'fine' }, h('summary', { text: 'Add one account' }), h('div', { class: 'stack', style: 'margin-top:8px' }, one)),
     msg);

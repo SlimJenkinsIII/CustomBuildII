@@ -22,7 +22,7 @@ test('hand-made Venmo and Chase Savings are paired with their statement accounts
   const pairs = suggestPairs();
   const by = id => pairs.find(p => p.from === id);
   assert.equal(by(s.ven).target, 'venmo');
-  assert.equal(by(s.sav).target, 'chase-bank-8527');
+  assert.equal(by(s.sav).target, 'savings-8527');
   // the built-in placeholders with no file import are offered but not matched
   assert.equal(by('save_amex').target, null);
 });
@@ -30,15 +30,15 @@ test('hand-made Venmo and Chase Savings are paired with their statement accounts
 test('matching keeps your number and name, moves coding to transfer, carries the opening balance and retires the old one', () => {
   const s = setup();
   const st = state(s, { overrides: { t1: s.ven, t2: 'food' }, opening: { date: '2024-12-31', balances: { [s.ven]: 5000 } } });
-  const out = applyMatchup(st, [{ from: s.ven, target: 'venmo' }, { from: s.sav, target: 'chase-bank-8527' }]);
+  const out = applyMatchup(st, [{ from: s.ven, target: 'venmo' }, { from: s.sav, target: 'savings-8527' }]);
   assert.equal(out.coding['src:venmo'], '1055');
   assert.equal(out.names['src:venmo'], 'Venmo');
-  assert.equal(out.coding['src:chase-bank-8527'], '1210');
+  assert.equal(out.coding['src:savings-8527'], '1210');
   assert.equal(out.overrides.t1, 'transfer');
   assert.equal(out.overrides.t2, 'food');
   assert.equal(out.opening.balances['src:venmo'], 5000);
   assert.equal(out.opening.balances[s.ven], undefined);
-  assert.deepEqual(out.merged, { [s.ven]: 'venmo', [s.sav]: 'chase-bank-8527' });
+  assert.deepEqual(out.merged, { [s.ven]: 'venmo', [s.sav]: 'savings-8527' });
   // nothing was changed in place
   assert.equal(st.overrides.t1, s.ven);
   applyRemoved({}, out.merged); applyCoding(out.coding); applyNames(out.names);

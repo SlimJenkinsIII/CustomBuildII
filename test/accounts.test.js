@@ -6,7 +6,7 @@ import { matchTransfers } from '../app/src/transfers.js';
 import { categorize } from '../app/src/rules.js';
 import { buildJournal, totalsOf, trialBalance } from '../app/src/journal.js';
 import { SOURCE_ACCOUNTS, SOURCE_ROLES, applyAccountList, last4Of, familyOf } from '../app/src/categories.js';
-import { cleanAccounts, digitsInName, accountForFile, guessFamily, addFromList, setLast4, addAccountOfFamily } from '../app/src/accounts.js';
+import { cleanAccounts, digitsInName, accountForFile, guessType, addFromList, setLast4, addAccountOfType, setType } from '../app/src/accounts.js';
 
 const reset = () => applyAccountList([]);
 const CHASE = (rows) => 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n' + rows.map(r => `${r[3] < 0 ? 'DEBIT' : 'CREDIT'},${r[0]},"${r[1]}",${r[2]},ACCT_XFER,0,,`).join('\n');
@@ -24,13 +24,13 @@ test('your pasted list becomes accounts: the first of each kind takes over the o
       'Chase Checkings (1044)', 'Chase Savings (1899)', 'Chase Savings (8527)', 'Amex High-Yield Savings (6348)', 'JPMorgan (3013)', 'Coinbase',
       'Chase Credit Card (6426)', 'Southwest Credit Card (1458)', 'Amex Credit Card (1000)'].join('\n'));
     assert.deepEqual(out.report.claimed, ['Chase Checkings (1044)', 'Chase Credit Card (6426)', 'Amex Credit Card (1000)']);
-    assert.deepEqual(out.report.created, ['Chase Savings (1899)', 'Chase Savings (8527)', 'Southwest Credit Card (1458)']);
-    assert.deepEqual(out.report.unsupported, ['Amex High-Yield Savings (6348)', 'JPMorgan (3013)', 'Coinbase']);   // no file importer for these yet
+    assert.deepEqual(out.report.created, ['Chase Savings (1899)', 'Chase Savings (8527)', 'Amex High-Yield Savings (6348)', 'JPMorgan (3013)', 'Coinbase', 'Southwest Credit Card (1458)']);
     assert.deepEqual(out.renames, { 'src:chase-checking': 'Chase Checkings (1044)', 'src:chase-card': 'Chase Credit Card (6426)', 'src:amex': 'Amex Credit Card (1000)' });
     const byKey = Object.fromEntries(out.accounts.map(a => [a.key, a]));
     assert.equal(byKey['chase-checking'].last4, '1044');
-    assert.deepEqual([byKey['chase-bank-1899'].role, byKey['chase-bank-1899'].family, byKey['chase-bank-1899'].last4], ['asset', 'chase-bank', '1899']);
-    assert.deepEqual([byKey['chase-card-1458'].role, byKey['chase-card-1458'].family], ['liability', 'chase-card']);
+    assert.deepEqual([byKey['savings-1899'].role, byKey['savings-1899'].type, byKey['savings-1899'].last4], ['asset', 'savings', '1899']);
+    assert.deepEqual([byKey['savings-6348'].type, byKey['investment-3013'].type, byKey['card-1458'].type, byKey['card-1458'].role], ['savings', 'investment', 'card', 'liability']);
+    assert.equal(out.accounts.find(a => a.name === 'Coinbase').type, 'investment');
     const codes = out.accounts.filter(a => a.code).map(a => a.code);
     assert.equal(new Set(codes).size, codes.length);                                       // each new account gets its own number
     assert.ok(codes.every(c => /^1\d{3}$|^2\d{3}$/.test(c)));
@@ -42,16 +42,16 @@ test('once accounts are applied, a file is recognised by its digits, and each ac
     const out = addFromList([], 'Chase Checking (1044)\nChase Savings (8527)\nSouthwest Credit Card (1458)');
     applyAccountList(out.accounts);
     assert.equal(accountForFile('Chase1044_Activity_20260105.CSV'), 'chase-checking');
-    assert.equal(accountForFile('Chase8527_Activity_20260105.CSV'), 'chase-bank-8527');
+    assert.equal(accountForFile('Chase8527_Activity_20260105.CSV'), 'savings-8527');
     assert.equal(accountForFile('Chase1458_Activity.CSV'), 'chase-card');                  // the first card takes over the built-in card account
     assert.equal(accountForFile('Chase9999_Activity.CSV'), null);                          // digits nobody has: ask
     assert.equal(accountForFile('activity.csv'), null);
-    assert.equal(SOURCE_ROLES['chase-bank-8527'], 'asset');
+    assert.equal(SOURCE_ROLES['savings-8527'], 'asset');
     assert.equal(SOURCE_ROLES['chase-card'], 'liability');
-    assert.equal(familyOf('chase-bank-8527'), 'chase-bank');
+    assert.equal(familyOf('savings-8527'), 'chase-bank');
     assert.equal(last4Of('chase-checking'), '1044');
     applyAccountList([]);
-    assert.equal(SOURCE_ACCOUNTS['chase-bank-8527'], undefined);                           // taken away again
+    assert.equal(SOURCE_ACCOUNTS['savings-8527'], undefined);                           // taken away again
   } finally { reset(); }
 });
 
@@ -59,9 +59,9 @@ test('a digit string can belong to one account only, and bad digits are refused'
   assert.throws(() => setLast4([{ key: 'chase-checking', last4: '1044' }], 'amex', '1044'), /already belongs/);
   assert.throws(() => setLast4([], 'amex', '12'), /last 4 digits/);
   assert.deepEqual(setLast4([{ key: 'chase-checking', last4: '1044' }], 'chase-checking', ''), [{ key: 'chase-checking', last4: '' }]);
-  assert.throws(() => addAccountOfFamily([{ key: 'chase-checking', last4: '1044' }], { name: 'X', family: 'chase-bank', last4: '1044' }), /already belongs/);
-  assert.throws(() => addAccountOfFamily([], { name: '  ', family: 'chase-bank', last4: '1111' }), /name/);
-  assert.throws(() => addAccountOfFamily([], { name: 'X', family: 'nope', last4: '1111' }), /kind/);
+  assert.throws(() => addAccountOfType([{ key: 'chase-checking', last4: '1044' }], { name: 'X', type: 'savings', last4: '1044' }), /already belongs/);
+  assert.throws(() => addAccountOfType([], { name: '  ', type: 'savings', last4: '1111' }), /name/);
+  assert.throws(() => addAccountOfType([], { name: 'X', type: 'nope', last4: '1111' }), /kind/);
 });
 
 test('saved accounts are cleaned: junk, duplicates and unknown kinds are dropped', () => {
@@ -77,14 +77,25 @@ test('saved accounts are cleaned: junk, duplicates and unknown kinds are dropped
   assert.equal(out.find(a => a.key === 'dup-1111').last4, '');                          // the digits were already taken
 });
 
-test('kinds are guessed from the words, and ones with no importer yet are left alone', () => {
-  assert.equal(guessFamily('Chase Savings (8527)'), 'chase-bank');
-  assert.equal(guessFamily('Southwest Credit Card (1458)'), 'chase-card');
-  assert.equal(guessFamily('Amex Credit Card (1000)'), 'amex');
-  assert.equal(guessFamily('Amex High-Yield Savings (6348)'), null);
-  assert.equal(guessFamily('Venmo'), 'venmo');
-  assert.equal(guessFamily('JPMorgan (3013)'), null);
-  assert.equal(guessFamily('Coinbase'), null);
+test('kinds are guessed from the words', () => {
+  assert.equal(guessType('Chase Checkings (1044)'), 'checking');
+  assert.equal(guessType('Chase Savings (8527)'), 'savings');
+  assert.equal(guessType('Amex High-Yield Savings (6348)'), 'savings');
+  assert.equal(guessType('Southwest Credit Card (1458)'), 'card');
+  assert.equal(guessType('Amex Credit Card (1000)'), 'card');
+  assert.equal(guessType('Venmo'), 'venmo');
+  assert.equal(guessType('JPMorgan (3013)'), 'investment');
+  assert.equal(guessType('Coinbase'), 'investment');
+});
+
+test('an asset can change between checking, savings and investment, but never to a card', () => {
+  const list = addFromList([], 'Chase Savings (8527)').accounts;
+  const key = list.find(a => a.last4 === '8527').key;
+  applyAccountList(list);
+  try {
+    assert.equal(setType(list, key, 'investment').find(a => a.key === key).type, 'investment');
+    assert.throws(() => setType(list, key, 'card'), /asset and a credit card/);
+  } finally { reset(); }
 });
 
 const t = (account, date, cents, description) => ({ account, date, cents, description });

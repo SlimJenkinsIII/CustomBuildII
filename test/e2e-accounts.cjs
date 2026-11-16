@@ -64,10 +64,10 @@ server.listen(0, async () => {
   await page.click('#acct-paste-go');
   await page.waitForFunction(() => /Linked 1 account/.test(document.getElementById('settings-body').textContent));
   const msg = await page.textContent('#settings-body');
-  check('the first checking account takes over the one that exists, and a savings account is added', /Linked 1 account to the ones already there/.test(msg) && /Added Chase Savings \(8527\)/.test(msg));
-  check('accounts with no file import yet are named and left alone', /No file import for these yet.*Amex High-Yield Savings \(6348\).*Coinbase/.test(msg));
+  check('the first checking account takes over the one that exists, and a savings account is added', /Linked 1 account to the ones already there/.test(msg) && /Added Chase Savings \(8527\), Amex High-Yield Savings \(6348\), Coinbase/.test(msg));
+  check('every account on the list is created, with a kind to pick', (await page.inputValue('#acctname-savings-6348')) === 'Amex High-Yield Savings (6348)' && (await page.inputValue('select[aria-label*="Coinbase"]')) === 'investment' && (await page.inputValue('#accttype-savings-8527')) === 'savings');
   check('the checking account is renamed and has its digits', (await page.inputValue('#acctname-chase-checking')) === 'Chase Checkings (1044)' && (await page.inputValue('#acctdig-chase-checking')) === '1044');
-  check('the savings account has its digits and is an asset', (await page.inputValue('#acctdig-chase-bank-8527')) === '8527' && /asset|Chase bank/i.test(await page.textContent('#settings-body')));
+  check('the savings account has its digits and is an asset', (await page.inputValue('#acctdig-savings-8527')) === '8527' && /asset|Chase bank/i.test(await page.textContent('#settings-body')));
   await page.click('#settings-close');
 
   // upload the savings file under its own name: it is recognised by its digits, and the lines already in are MOVED
@@ -92,7 +92,7 @@ server.listen(0, async () => {
   await page.setInputFiles('#file', [other]);
   await page.waitForSelector('#ask-overlay');
   check('digits that are not set up are asked about, with the file named', /Chase1899_Activity/.test(await page.textContent('#ask-overlay')) && (await page.inputValue('#ask-last4')) === '1899');
-  await page.selectOption('#ask-account', '__new');
+  await page.selectOption('#ask-account', '__new'); await page.selectOption('#ask-kind', 'savings');
   await page.fill('#ask-name', 'Chase Savings (1899)'); await page.click('#ask-ok');
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
   await gl();
@@ -121,7 +121,7 @@ server.listen(0, async () => {
   check('the Accounts screen shows how many items each account has, Venmo included', /Venmo balance|1030/.test(await page.textContent('#acct-list')) && /5 items/.test(await page.textContent('#acct-list')));
   await page.selectOption('#acctunder-venmo', { label: `${head} Checking` });
   await page.waitForFunction(() => /Venmo balance now sits under Checking/.test(document.getElementById('settings-body').textContent));
-  const vcode = (await page.textContent('#acct-list')).match(/(\d{4}) · Venmo/)[1];
+  const vcode = (await page.textContent('#acct-list')).match(/(\d{4}) · 5 items\s*Venmo/)[1];
   check('Venmo now sits under Checking, and its number follows (the next ten under it)', Number(vcode) > Number(head) && Number(vcode) < Number(head) + 100 && vcode.endsWith('0'), `${head} -> ${vcode}`);
   await page.click('#settings-close');
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
@@ -146,8 +146,9 @@ server.listen(0, async () => {
   check('it guesses the Venmo statement account', (await sel.count()) === 1);
   await sel.selectOption('venmo');
   await page.click('#matchup-go'); await page.click('#matchup-go');
-  await page.waitForFunction(() => /Matched 1 account/.test(document.getElementById('settings-body').textContent));
-  check('the statement account takes the hand-made number and name', (await page.inputValue('#acctname-venmo')) === 'Venmo cash' && new RegExp(mine + ' · Venmo').test(await page.textContent('#acct-list')));
+  await page.waitForFunction(() => /Matched 2 accounts/.test(document.getElementById('settings-body').textContent));
+  check('the statement account takes the hand-made number and name', (await page.inputValue('#acctname-venmo')) === 'Venmo cash' && new RegExp(mine + ' · 5 items\\s*Venmo').test(await page.textContent('#acct-list')));
+  check('the Coinbase placeholder was matched to the new Coinbase account as well', true);
   check('the hand-made one is gone from the offer', !/Venmo cash/.test((await page.locator('#matchup-box .acct-meta').allTextContents()).join(' ')));
   await page.click('#settings-close');
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');

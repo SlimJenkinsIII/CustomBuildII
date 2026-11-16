@@ -1,7 +1,7 @@
 // Your accounts, and which file belongs to which. Every statement file names its account by the last four digits,
 // so once an account has its digits the app can recognise its files by itself.
 import {
-  SOURCE_ACCOUNTS, FAMILIES, BUILTIN_SOURCES, DEFAULT_OF_FAMILY, familyOf, last4Of, familyForFormat, accountKeysOfFamily, roleOfFamily, usedCodes,
+  SOURCE_ACCOUNTS, SOURCE_ROLES, ACCOUNT_TYPES, roleOfType, FAMILIES, BUILTIN_SOURCES, DEFAULT_OF_FAMILY, familyOf, last4Of, familyForFormat, accountKeysOfFamily, usedCodes,
 } from './categories.js';
 
 // What is saved: built-in accounts only remember their last four digits; accounts you add are saved whole.
@@ -11,11 +11,18 @@ export function cleanAccounts(raw) {
   for (const a of raw) {
     if (!a || typeof a.key !== 'string' || !/^[a-z0-9-]{3,32}$/.test(a.key) || keys.has(a.key)) continue;
     const last4 = /^\d{4}$/.test(a.last4 ?? '') && !digits.has(a.last4) ? a.last4 : '';
-    if (BUILTIN_SOURCES.includes(a.key)) { keys.add(a.key); if (last4) digits.add(last4); out.push({ key: a.key, last4 }); continue; }
+    const type = ACCOUNT_TYPES[a.type] ? a.type : undefined;
+    if (BUILTIN_SOURCES.includes(a.key)) {
+      keys.add(a.key); if (last4) digits.add(last4);
+      const role = SOURCE_ROLES[a.key];
+      out.push({ key: a.key, last4, ...(type && a.key !== 'venmo' && roleOfType(type) === role ? { type } : {}) });
+      continue;
+    }
     const name = typeof a.name === 'string' ? a.name.trim().slice(0, 60) : '';
     if (!name || !FAMILIES[a.family] || !['asset', 'liability'].includes(a.role) || !/^\d{4}$/.test(a.code ?? '') || codes.has(a.code)) continue;
+    const kind = type && roleOfType(type) === a.role ? type : a.role === 'liability' ? 'card' : a.family === 'venmo' ? 'venmo' : 'checking';
     keys.add(a.key); codes.add(a.code); if (last4) digits.add(last4);
-    out.push({ key: a.key, name, family: a.family, role: a.role, code: a.code, last4 });
+    out.push({ key: a.key, name, family: a.family, role: a.role, type: kind, code: a.code, last4 });
   }
   return out;
 }
@@ -34,49 +41,52 @@ export function accountForFile(fileName) {
   return null;
 }
 
-// What kind of account each pasted line describes, from its words. family is null when no file importer exists for it yet.
-export function guessFamily(line) {
+// What kind of account a pasted line describes, from its words. Anything can be an account; the kind only decides where it sits.
+export function guessType(line) {
   const t = String(line).toLowerCase();
   if (/venmo/.test(t)) return 'venmo';
-  const card = /credit|card/.test(t);
-  if (/amex|american express/.test(t)) return card && !/savings/.test(t) ? 'amex' : null;           // Amex savings has no importer yet
-  if (/southwest|sapphire|freedom|chase/.test(t) && card) return 'chase-card';
-  if (/chase|checking|savings/.test(t) && !card) return /jpmorgan|coinbase|brokerage|invest/.test(t) ? null : 'chase-bank';
-  return null;
+  if (/credit|card|sapphire|freedom|southwest/.test(t)) return 'card';
+  if (/invest|jpmorgan|brokerage|coinbase|crypto|401|ira\b|roth|fidelity|vanguard|schwab/.test(t)) return 'investment';
+  if (/sav|high-yield|hysa|money market/.test(t)) return 'savings';
+  return 'checking';
 }
+// The built-in account a first line of that kind takes over, so what is already imported stays with it.
+const builtinFor = (type, line) => (type === 'venmo' ? 'venmo' : type === 'checking' ? 'chase-checking'
+  : type === 'card' ? (/amex|american express/i.test(line) ? 'amex' : 'chase-card') : null);
+// Which importer family a new account of this kind is filed under (what an earlier file of that kind would be moved from).
+const familyFor = (type, line = '') => (type === 'venmo' ? 'venmo' : type === 'card' ? (/amex|american express/i.test(line) ? 'amex' : 'chase-card') : 'chase-bank');
 
 function freeCode(role, taken) {
   for (let n = role === 'asset' ? 1040 : 2020; n < (role === 'asset' ? 1900 : 2100); n += 10) if (!taken.has(String(n))) return String(n);
   throw new Error('No free account numbers left in that range.');
 }
 
-// Turns a pasted list ("Chase Savings (8527)" on each line) into accounts. The first account of each kind takes over the one that
-// is already there (so everything already imported stays with it); the rest are added. Returns what happened, line by line.
+// Turns a pasted list ("Chase Savings (8527)" on each line) into accounts. The first checking account, card and so on takes over the
+// one that is already there (so everything already imported stays with it); every other line becomes its own account.
 export function addFromList(accounts, text, coding = {}) {
   let next = cleanAccounts(accounts);
-  const renames = {}, report = { claimed: [], created: [], unsupported: [], skipped: [] };
-  const taken = new Set(usedCodes(coding));
+  const renames = {}, report = { claimed: [], created: [], skipped: [] };
+  const taken = new Set(usedCodes(coding)), claimed = new Set();
   for (const raw of String(text ?? '').split(/\r?\n/)) {
-    const line = raw.trim();
+    const line = raw.trim().replace(/\s+/g, ' ');
     if (!line) continue;
-    const last4 = /(\d{4})\s*\)?\s*$/.exec(line)?.[1] ?? (/\((\d{4})\)/.exec(line)?.[1] ?? '');
-    const name = line.replace(/\s+/g, ' ');
-    const family = guessFamily(line);
-    if (!family) { report.unsupported.push(line); continue; }
+    const last4 = /\((\d{4})\)/.exec(line)?.[1] ?? /(?<!\d)(\d{4})\s*$/.exec(line)?.[1] ?? '';
+    const type = guessType(line);
     if (last4 && next.some(a => a.last4 === last4)) { report.skipped.push(line); continue; }
-    const def = DEFAULT_OF_FAMILY[family];
-    const defTaken = next.find(a => a.key === def)?.last4;
-    if (!defTaken) {                                                    // the built-in account of that kind takes this one
+    const def = builtinFor(type, line);
+    if (def && !claimed.has(def) && !next.find(a => a.key === def)?.last4) {
+      claimed.add(def);
       next = [...next.filter(a => a.key !== def), { key: def, last4 }];
-      renames[`src:${def}`] = name;
+      renames[`src:${def}`] = line;
       report.claimed.push(line);
       continue;
     }
-    const role = roleOfFamily(family);
+    const role = roleOfType(type);
     const code = freeCode(role, taken); taken.add(code);
-    const key = `${family}-${last4 || code}`;
+    const family = familyFor(type, line);
+    const key = `${type}-${last4 || code}`;
     if (next.some(a => a.key === key)) { report.skipped.push(line); continue; }
-    next = [...next, { key, name, family, role, code, last4 }];
+    next = [...next, { key, name: line, family, role, type, code, last4 }];
     report.created.push(line);
   }
   return { accounts: next, renames, report };
@@ -92,19 +102,28 @@ export function setLast4(accounts, key, last4) {
   return accounts.map(a => (a.key === key ? { ...a, last4: digits } : a));
 }
 
-// Adds one account of a kind (when a file turns up that belongs to none of yours). Returns { accounts, key }.
-export function addAccountOfFamily(accounts, { name, family, last4 }, coding = {}) {
-  if (!FAMILIES[family]) throw new Error('Choose what kind of account it is.');
+// Adds one account (when a file turns up that belongs to none of yours). Returns { accounts, key }.
+export function addAccountOfType(accounts, { name, type, last4 }, coding = {}) {
+  if (!ACCOUNT_TYPES[type] || type === 'venmo' && accounts.some(a => a.key === 'venmo')) throw new Error('Choose what kind of account it is.');
   const clean = String(name ?? '').trim().slice(0, 60);
   if (!clean) throw new Error('Give the account a name.');
   const digits = String(last4 ?? '').trim();
   if (digits && !/^\d{4}$/.test(digits)) throw new Error('Use the last 4 digits, like 1044.');
   if (digits && accounts.some(a => a.last4 === digits)) throw new Error(`${digits} already belongs to another account.`);
-  const role = roleOfFamily(family);
+  const role = roleOfType(type);
   const code = freeCode(role, usedCodes(coding));
-  const key = `${family}-${digits || code}`;
+  const key = `${type}-${digits || code}`;
   if (accounts.some(a => a.key === key) || SOURCE_ACCOUNTS[key]) throw new Error('That account already exists.');
-  return { accounts: [...accounts, { key, name: clean, family, role, code, last4: digits }], key };
+  return { accounts: [...accounts, { key, name: clean, family: familyFor(type, clean), role, type, code, last4: digits }], key };
+}
+
+// Changes what kind an asset account is (Checking, Savings, Investment). A card stays a card.
+export function setType(accounts, key, type) {
+  if (!ACCOUNT_TYPES[type]) throw new Error('Choose what kind of account it is.');
+  if (roleOfType(type) !== (SOURCE_ROLES[key] ?? 'asset')) throw new Error('An account can\u2019t change between an asset and a credit card.');
+  const has = accounts.some(a => a.key === key);
+  const list = has ? accounts : [...accounts, { key, last4: last4Of(key) }];
+  return cleanAccounts(list.map(a => (a.key === key ? { ...a, type } : a)));
 }
 
 export { familyOf, familyForFormat, accountKeysOfFamily, DEFAULT_OF_FAMILY };

@@ -2,6 +2,7 @@
 //   { date: 'YYYY-MM-DD', description, cents, account, source }
 // Money convention: cents are integers. NEGATIVE = money out, POSITIVE = money in.
 import { parseCsv, parseCsvObjects } from './csv.js';
+import { endOfDayBalances, dayBefore } from './balances.js';
 
 export function toCents(str) {
   const s = String(str).replace(/[$,\s]/g, '');
@@ -101,12 +102,38 @@ export function detectFormat(headers) {
   return null;
 }
 
+// Venmo statements show the balance at the start of the period (above the lines) and at the end (below them).
+function venmoAnchors(rows, account, dates) {
+  const money = r => { const v = (r || '').replace(/[$,\s]/g, ''); return v ? toCents(v) : null; };
+  const begin = rows.map(r => money(r['Beginning Balance'])).find(v => v !== null);
+  const end = [...rows].reverse().map(r => money(r['Ending Balance'])).find(v => v !== null);
+  const out = [];
+  if (dates.length) {
+    const sorted = [...dates].sort();
+    if (begin !== undefined) out.push({ account, date: dayBefore(sorted[0]), cents: begin, kind: 'file' });
+    if (end !== undefined) out.push({ account, date: sorted[sorted.length - 1], cents: end, kind: 'file' });
+  }
+  return out;
+}
+
 export function parseStatement(text, account = '') {
   const vrows = venmoRows(text);
-  if (vrows) { const v = venmo(vrows, account || 'venmo'); return { format: 'venmo', transactions: v.transactions, notes: v.notes }; }
+  if (vrows) {
+    const acct = account || 'venmo';
+    const v = venmo(vrows, acct);
+    const dates = vrows.filter(r => r['Datetime'] && /^(complete|issued)$/i.test(r['Status'])).map(r => r['Datetime'].slice(0, 10));
+    return { format: 'venmo', transactions: v.transactions, notes: v.notes, anchors: venmoAnchors(vrows, acct, dates) };
+  }
   const rows = parseCsvObjects(text);
   const format = detectFormat(rows.length ? Object.keys(rows[0]) : []);
   if (!format) throw new Error('Unrecognized statement format. Expected a Chase, Amex or Venmo CSV.');
   const fn = { 'chase-checking': chaseChecking, 'chase-card': chaseCard, amex }[format];
-  return { format, transactions: fn(rows, account || format) };
+  const acct = account || format;
+  const out = { format, transactions: fn(rows, acct), anchors: [] };
+  if (format === 'chase-checking') {
+    // the running balance on each line gives the closing balance of each day
+    const lines = rows.map(r => ({ date: toIsoDate(r['Posting Date']), cents: toCents(r['Amount']), bal: r['Balance'] === undefined || r['Balance'] === '' ? NaN : toCents(r['Balance']) }));
+    out.anchors = endOfDayBalances(lines).map(a => ({ account: acct, ...a, kind: 'file' }));
+  }
+  return out;
 }

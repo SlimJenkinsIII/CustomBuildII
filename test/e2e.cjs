@@ -315,8 +315,13 @@ server.listen(0, async () => {
 
   // ---------- opening balances: the TB starts from them, then shows month-end balances ----------
   check('Balances is the default TB view, with an Opening column', /Opening/.test(await page.locator('#fs-tb thead').textContent()) && /Dec 31, 2025/.test(await page.locator('#fs-tb thead').textContent()));
-  check('it nudges you to enter opening balances', /No opening balances yet/.test(await page.locator('#fs-tb').textContent()));
-  await page.click('#fs-tb >> text=Enter opening balances');
+  check('no nudge to type opening balances: they are worked out from the running balance in the Chase file', !/No opening balances yet/.test(await page.locator('#fs-tb').textContent()));
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Opening balances' }).click();
+  check('the Opening screen says how the checking balance was worked out', /Worked out from your statements/.test(await page.textContent('#open-note-chase-checking')), await page.textContent('#open-note-chase-checking'));
+  check('and a card with no balance in its file asks for one you know', /No balance in the statements yet/.test(await page.textContent('#open-note-amex')));
+  await page.fill('#known-amt-amex', '500'); await page.click('#known-go-amex');
+  await page.waitForFunction(() => /the balance you gave me/.test(document.getElementById('open-note-amex').textContent));
+  check('give it one balance and it works back to what you owed at the start', /the balance you gave me \(.*\): \$/.test(await page.textContent('#open-note-amex')), await page.textContent('#open-note-amex'));
   check('the opening date starts at 12/31/2024', (await page.inputValue('#open-date')) === '2024-12-31');
   await page.fill('#open-src-chase-checking', '1000'); await page.press('#open-src-chase-checking', 'Tab');
   await page.fill('#open-save_chase', '5000'); await page.press('#open-save_chase', 'Tab');

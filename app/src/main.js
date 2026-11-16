@@ -15,6 +15,7 @@ import { SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_F
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
+import { mergeAnchors, cleanAnchors, deriveOpening } from './balances.js';
 import { trialBalance, balanceSheet, tieOut, openingAccounts, cleanOpening, countBeforeOpening, DEFAULT_OPENING_DATE } from './journal.js';
 import { createVault, seal, unlock, openWith } from './vault.js';
 import { memoryStorage, indexedDbStorage } from './storage.js';
@@ -31,7 +32,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, merged: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, merged: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], anchors: [], sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, open: (() => { try { return new Set(JSON.parse(localStorage.getItem('my-budget-open') ?? '[]')); } catch { return new Set(); } })(), period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -166,7 +167,7 @@ async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
   let added = 0, moved = 0, skipped = 0, external = 0, details = [];
   const left = [], movedInto = new Set(), wentInto = new Map();
-  const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts };
+  const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors };
   try {
     for (const file of files) {
       const text = await file.text();
@@ -178,6 +179,7 @@ async function importFiles(files) {
       if (where.accounts) { state.accounts = where.accounts; recompute(); }
       parsed = parseStatement(text, where.key);
       const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyForFormat(parsed.format)]);
+      state.anchors = mergeAnchors(state.anchors, parsed.anchors);
       state.raw = r.merged; added += r.addedCount; skipped += r.skippedCount; moved += r.movedCount;
       if (r.movedCount) movedInto.add(SOURCE_ACCOUNTS[where.key].name);
       wentInto.set(SOURCE_ACCOUNTS[where.key].name, (wentInto.get(SOURCE_ACCOUNTS[where.key].name) ?? 0) + r.addedCount + r.movedCount);
@@ -193,16 +195,16 @@ async function importFiles(files) {
   } catch (err) {
     $('status').textContent = err.message;
   }
-  lastImport = (added || moved || details.length) ? before : null;
+  lastImport = (added || moved || details.length || state.anchors !== before.anchors) ? before : null;
   $('undo-import').hidden = !lastImport;
   resetGl();
   recompute();
   render();
-  if (added || moved || details.length || state.accounts !== before.accounts) markDirty();
+  if (added || moved || details.length || state.accounts !== before.accounts || state.anchors !== before.anchors) markDirty();
 }
 $('undo-import').addEventListener('click', () => {
   if (!lastImport) return;
-  state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts;
+  state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts; state.anchors = lastImport.anchors;
   lastImport = null; $('undo-import').hidden = true;
   $('status').textContent = 'Import undone.';
   resetGl(); recompute(); render(); markDirty();
@@ -214,7 +216,20 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, sync: state.sync, opening: state.opening });
+
+// What each account stood at on the opening date, worked out from the balances in your statements and any balance you told me. A figure
+// you typed on the Opening screen wins; otherwise this is what the books start from.
+function backedOpening() {
+  const roles = Object.fromEntries(Object.keys(SOURCE_ACCOUNTS).map(k => [k, SOURCE_ROLES[k] ?? 'asset']));
+  const found = deriveOpening(state.txs, state.anchors, state.opening.date, roles);
+  return Object.fromEntries(Object.entries(found).map(([k, v]) => [`src:${k}`, { ...v, account: k }]));
+}
+function eff() {
+  const found = backedOpening(), balances = {};
+  for (const [k, v] of Object.entries(found)) if (v.cents > 0) balances[k] = v.cents;
+  return { date: state.opening.date, balances: { ...balances, ...state.opening.balances } };
+}
 
 function loadSnapshot(d) {
   state.raw = Array.isArray(d.raw) ? d.raw : [];
@@ -236,11 +251,12 @@ function loadSnapshot(d) {
   state.fuel = cleanFuel(d.fuel, id => !!CATEGORIES[migrateCategory(id)]);
   state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
+  state.anchors = cleanAnchors(d.anchors);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; state.merged = {}; applyRemoved({}, {}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; state.merged = {}; applyRemoved({}, {}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; state.anchors = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -1219,7 +1235,7 @@ const fmtFull = iso => dateOf(iso).toLocaleDateString('en-US', { month: 'short',
 function renderTrialBalance(asOf) {
   const bal = state.tbView === 'bal';
   const years = yearsOf();
-  const tb = trialBalance(state.txs, state.year, asOf, state.opening);
+  const tb = trialBalance(state.txs, state.year, asOf, eff());
   const shown = bal ? tb.rows : tb.rows.filter(r => tb.months.some(ym => r.byMonth[ym] !== 0));
   const shownMonth = ym => (bal ? tb.reached[ym] : tb.hasData[ym]);
   const cellValue = (r, ym) => (bal ? r.balByMonth[ym] : r.byMonth[ym]);
@@ -1294,12 +1310,12 @@ function renderTrialBalance(asOf) {
 }
 
 function renderBalanceSheet(asOf) {
-  const bs = balanceSheet(state.txs, state.year, asOf, state.opening);
+  const bs = balanceSheet(state.txs, state.year, asOf, eff());
   const mo = pickedMonth();
   const mi = mo ? Number(mo.slice(5)) - 1 : -1;
   const shown = ym => bs.reached[ym];
   // The month before the one picked; for January that is last December (or the opening balance).
-  const prevBs = mo && mi === 0 ? balanceSheet(state.txs, String(Number(state.year) - 1), asOf, state.opening) : null;
+  const prevBs = mo && mi === 0 ? balanceSheet(state.txs, String(Number(state.year) - 1), asOf, eff()) : null;
   const prevDec = `${Number(state.year) - 1}-12`;
   const prior = (group, r) => {
     if (mi > 0) return r ? r.byMonth[bs.months[mi - 1]] : group === 'earnings' ? bs.equity.earnings.byMonth[bs.months[mi - 1]] : bs[group].byMonth[bs.months[mi - 1]];
@@ -1436,7 +1452,7 @@ function renderTie() {
   }
   if (!state.tie || (state.tie !== 'ytd' && !months.includes(state.tie))) state.tie = months[0];
   const ytd = state.tie === 'ytd';
-  const t = tieOut(state.txs, plan, ytd ? { kind: 'year', year: asOf.slice(0, 4) } : { kind: 'month', ym: state.tie }, asOf, state.opening);
+  const t = tieOut(state.txs, plan, ytd ? { kind: 'year', year: asOf.slice(0, 4) } : { kind: 'month', ym: state.tie }, asOf, eff());
   const label = ytd ? `${asOf.slice(0, 4)} to date` : fmtMonth(state.tie);
   const partial = !ytd && state.tie === monthOf(asOf) && Number(asOf.slice(8)) < new Date(Date.UTC(Number(asOf.slice(0, 4)), Number(asOf.slice(5, 7)), 0)).getUTCDate();
 
@@ -2041,30 +2057,52 @@ function renderAccountsScreen(body) {
 function renderOpeningScreen(body) {
   const msg = h('p', { class: 'msg', role: 'status' });
   const plug = h('p', { class: 'free-line', id: 'open-plug' });
+  const found = backedOpening();
   const update = () => {
-    const have = openingAccounts().filter(a => a.side === 'asset').reduce((s, a) => s + (state.opening.balances[a.key] ?? 0), 0);
-    const owe = openingAccounts().filter(a => a.side === 'liability').reduce((s, a) => s + (state.opening.balances[a.key] ?? 0), 0);
+    const bal = eff().balances;
+    const have = openingAccounts().filter(a => a.side === 'asset').reduce((s, a) => s + (bal[a.key] ?? 0), 0);
+    const owe = openingAccounts().filter(a => a.side === 'liability').reduce((s, a) => s + (bal[a.key] ?? 0), 0);
     plug.textContent = `Opening balance equity: ${money(have - owe)} (what you have, ${money(have)}, less what you owe, ${money(owe)}).`;
   };
-  const save = () => { render(); markDirty(); update(); };
+  const save = () => { recompute(); render(); markDirty(); renderSettingsScreen(); };
   const field = a => {
-    const id = `open-${a.key.replace(':', '-')}`;
+    const id = `open-${a.key.replace(':', '-')}`, d = found[a.key], account = a.key.slice(4);
+    const typed = state.opening.balances[a.key];
+    const bad = d?.checks.filter(c => !c.ok) ?? [];
+    const note = d
+      ? (d.cents <= 0 ? `Worked out from your statements: ${money(d.cents)}. I can only start an account at a positive balance, so it starts at zero.`
+        : `Worked out from ${d.kind === 'entered' ? 'the balance you gave me' : 'your statements'} (${fmtFull(d.from)}): ${money(d.cents)}.`
+          + (bad.length ? ` The balance on ${fmtFull(bad[0].date)} is ${money(Math.abs(bad[0].off))} ${bad[0].off < 0 ? 'lower' : 'higher'} than the transactions explain, so a transaction or statement is probably missing around then.`
+            : d.checks.length ? ` It agrees with ${plural(d.checks.length, 'later balance', 'later balances')}, so nothing is missing.` : ''))
+      : 'No balance in the statements yet. Tell me one you know, such as the latest statement balance, and I will work back.';
+    const known = d && d.kind !== 'entered' && !bad.length ? [] : [h('div', { class: 'row-form', style: 'grid-column:1/-1' },
+      h('input', { id: `known-date-${account}`, type: 'date', 'aria-label': `Date of a balance you know for ${a.name}`, value: state.txs.filter(t => t.account === account).map(t => t.date).sort().pop() ?? '' }),
+      h('input', { id: `known-amt-${account}`, type: 'text', inputmode: 'decimal', placeholder: a.side === 'asset' ? 'What it had' : 'What you owed', 'aria-label': `The balance on that date for ${a.name}` }),
+      h('button', { type: 'button', class: 'btn ghost small', id: `known-go-${account}`, text: 'Work back from this', onclick: () => {
+        try {
+          const date = document.getElementById(`known-date-${account}`).value, c = toCents(document.getElementById(`known-amt-${account}`).value);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('date');
+          state.anchors = mergeAnchors(state.anchors, [{ account, date, cents: c, kind: 'entered' }]);
+          save();
+        } catch { msg.className = 'msg error'; msg.textContent = 'Pick the date and type the balance on it, like 1,250.00.'; }
+      } }))];
     return [h('label', { for: id, text: `${a.code} ${a.name}` }),
-      h('input', { id, type: 'text', inputmode: 'decimal', value: dollars(state.opening.balances[a.key] ?? 0), onchange: e => {
+      h('input', { id, type: 'text', inputmode: 'decimal', placeholder: d && d.cents > 0 ? dollars(d.cents) : '', value: typed ? dollars(typed) : '', onchange: e => {
         try {
           const c = e.target.value.trim() === '' ? 0 : toCents(e.target.value);
           if (c < 0) throw new Error('negative');
           const balances = { ...state.opening.balances };
           if (c) balances[a.key] = c; else delete balances[a.key];
           state.opening = { ...state.opening, balances };
-          e.target.value = dollars(c); e.target.classList.remove('bad'); msg.textContent = ''; save();
+          e.target.value = c ? dollars(c) : ''; e.target.classList.remove('bad'); msg.textContent = ''; save();
         } catch { e.target.classList.add('bad'); msg.className = 'msg error'; msg.textContent = 'Enter an amount like 1,250.00. Use a positive number for what you have and for what you owe.'; }
-      } })];
+      } }),
+      h('p', { class: 'note open-note', id: `open-note-${account}`, style: 'grid-column:1/-1;margin:0', text: note }), ...known];
   };
   const accounts = openingAccounts();
   update();
   body.append(
-    h('p', { class: 'sub', text: 'Where each account stood at the end of your opening date. Enter what you have in each account, and what you owe on each card, as they read on the statement. Anything dated on or before this date is left out of TB Summary and Tie-out.' }),
+    h('p', { class: 'sub', text: 'Where each account stood at the end of your opening date. You don’t have to type these: I work them out from the balances in your statements (Chase bank and Venmo files carry them) less what moved since. For a card, tell me one balance you know and I work back. Typing a figure here overrides mine.' }),
     h('div', { class: 'row-form', style: 'margin:10px 0' },
       h('label', { for: 'open-date', text: 'Opening date', style: 'font-size:14px' }),
       h('input', { id: 'open-date', type: 'date', value: state.opening.date, onchange: e => {

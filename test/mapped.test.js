@@ -57,10 +57,13 @@ test('a file is read by itself: in and out columns, one amount column, investmen
   const { autoMap, accountText, accountDigitsInText } = await import('../app/src/parsers.js');
   const two = autoMap(BROKER);
   assert.deepEqual([two.date, two.credit, two.debit, two.amount], ['Trade Date', 'Amount In', 'Amount Out', undefined]);
-  assert.ok(two.skip.includes('bought'));                                   // it saw buys, so it is an investment file
-  assert.deepEqual(parseMapped(BROKER, two, 'a').transactions.map(t => t.cents), [100000, 310, -5000]);
+  assert.equal(two.investment, true);                                        // a dividend line: it is a brokerage file
+  const { TRADE_SKIP } = await import('../app/src/parsers.js');
+  assert.deepEqual(parseMapped(BROKER, { ...two, skip: TRADE_SKIP }, 'a').transactions.map(t => t.cents), [100000, 310, -5000]);   // read into an investment account
   const one = autoMap('Date,Description,Amount\n03/01/2026,INTEREST,1.25\n03/02/2026,TRANSFER IN,500.00');
-  assert.deepEqual([one.amount, one.skip.length], ['Amount', 0]);
+  assert.deepEqual([one.amount, one.investment], ['Amount', false]);
+  // a card file's "Sale" lines are spending, not trades: words alone never make a file an investment file
+  assert.equal(autoMap('Date,Description,Type,Amount\n03/01/2026,TARGET,Sale,-40.00\n03/02/2026,PAYMENT,Payment,40.00').investment, false);
   assert.equal(autoMap('Posted,Memo,Value\n2026-04-01,INTEREST,1.10'), null);   // no date column it can be sure of: it asks
   assert.deepEqual(accountDigitsInText(accountText(BROKER)), ['3013']);           // from the top, not from the transfer descriptions
 });

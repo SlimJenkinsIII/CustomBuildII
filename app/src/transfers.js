@@ -10,14 +10,21 @@
 //                 files (e.g. Venmo not imported yet). Held for review, not silently counted.
 // Matched/suggested transactions also get `pairId` (the id of the other side).
 
-const HINT = /payment|pymt|transfer|xfer|epayment|autopay|zelle|venmo|cash app|paypal|thank you/i;
+const HINT = /payment|pymt|transfer|xfer|epayment|autopay|zelle|venmo|cash app|paypal|thank you|deposit|withdraw|contribution|\bach\b|wire|funds|moneylink|journal/i;
+const GENERIC = new Set(['chase', 'bank', 'account', 'checking', 'checkings', 'savings', 'credit', 'card', 'the', 'and', 'high', 'yield']);
 const MAX_DAYS = 5;
 const CASH_OUT = /^VENMO TRANSFER TO BANK/;
 const TXN_NO = /transaction\s*#\s*:?\s*(\d{6,})/i;
 
 const dayNumber = iso => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000);
 
-export function matchTransfers(transactions, { maxDays = MAX_DAYS } = {}) {
+// accounts (optional): { [accountKey]: { name, last4, type } }. With it, a pair also counts as a transfer when one line names the other
+// account (its last four digits, or a word of its name like JPMORGAN), or when one side is an investment or savings account
+// (money only moves into those from your own accounts), and investment transfers may take a few more days to land.
+export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {} } = {}) {
+  const words = key => (accounts[key]?.name ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !GENERIC.has(w) && !/^\d+$/.test(w));
+  const names = (t, other) => { const d = (t.description ?? '').toLowerCase(); const a = accounts[other]; return !!a && ((a.last4 && d.includes(a.last4)) || words(other).some(w => d.includes(w))); };
+  const putAway = key => ['investment', 'savings'].includes(accounts[key]?.type);
   // Rows you entered by hand are not statement rows, so they never pair with one.
   const outs = transactions.filter(t => t.cents < 0 && !t.byHand);
   const ins = transactions.filter(t => t.cents > 0 && !t.byHand);
@@ -31,8 +38,10 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS } = {}) {
       // Only a cash-out from the Venmo balance can be one half of a transfer.
       if ((o.account === 'venmo' && !CASH_OUT.test(o.description)) || (i.account === 'venmo' && !CASH_OUT.test(i.description))) continue;
       const gap = Math.abs(dayNumber(o.date) - dayNumber(i.date));
-      if (gap > maxDays) continue;
-      candidates.push({ o, i, gap, hinted: HINT.test(o.description) || HINT.test(i.description) });
+      const invest = accounts[o.account]?.type === 'investment' || accounts[i.account]?.type === 'investment';
+      if (gap > (invest ? maxDays + 3 : maxDays)) continue;
+      const hinted = HINT.test(o.description) || HINT.test(i.description) || names(o, i.account) || names(i, o.account) || putAway(o.account) || putAway(i.account);
+      candidates.push({ o, i, gap, hinted });
     }
   }
   // Best first: wording evidence, then closest dates. Each transaction can be used only once.

@@ -13,6 +13,17 @@ const CARD_WORDS = /\bcard\b|\bcrd\b|amex|american express|chase credit|credit c
 // A transfer between two of your own bank accounts ("Online Transfer to SAV ...8527", "Transfer from CHK ...1044"). It is never spending
 // and never belongs to a made-up savings account: until the other account's statement is in, it waits in transfers in transit.
 export const isOwnTransfer = t => /\bTRANSFER (TO|FROM) (SAV|CHK|SAVINGS|CHECKING)\b/i.test(t.description);
+// What a line in an investment account is, from its wording. Anything that isn't interest, a dividend or a fee is money moving in or out
+// of the account, which is a transfer from or to one of your other accounts.
+export function brokerageKind(t) {
+  const d = t.description ?? '';
+  if (/interest/i.test(d)) return ['other_interest', 'brokerage: interest'];
+  if (/dividend|\bdiv\b|cap(ital)? ?gain|distribution|qualified|ordinary/i.test(d)) return ['other_gains', 'brokerage: dividend or distribution'];
+  if (/\bfee|commission|adr fee/i.test(d)) return ['other_misc', 'brokerage: fee'];
+  return ['transfer', 'brokerage: money in or out of the account'];
+}
+// Buys and sells inside an investment account move money between cash and shares; they are neither spending nor transfers.
+export const TRADE = /\b(buy|bought|sell|sold|purchase|purchased|sale|reinvest(ment)?|redemption|redeemed|exchange)\b/i;
 export const isVenmoCashOut = t => t.account === 'venmo' && /^VENMO TRANSFER TO BANK/.test(t.description);
 
 export function isCardPayment(t) {
@@ -71,7 +82,7 @@ export function ruleMatches(rule, t) {
 //   { 'chase-savings': 'save_chase' }.  A matched transfer INTO such an account counts as a
 // savings contribution on the sending side; the receiving side is ignored so it isn't counted twice.
 export function categorize(transactions, {
-  userRules = [], rules = defaultRules, savingsAccounts = {}, reimbursePromptCents = 10000, ownAccounts = false,
+  userRules = [], rules = defaultRules, savingsAccounts = {}, reimbursePromptCents = 10000, ownAccounts = false, investmentAccounts = new Set(),
 } = {}) {
   const byId = new Map(transactions.map(t => [t.id, t]));
   // once your savings accounts have statements of their own, no rule files a transfer into a made-up savings account
@@ -87,6 +98,9 @@ export function categorize(transactions, {
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';
       why = savingsCat ? `transfer into ${other.account}` : 'matched transfer';
+    } else if (investmentAccounts.has(t.account) && brokerageKind(t)) {
+      // a brokerage account needs no coding: what each line is follows from its wording
+      [category, why] = brokerageKind(t);
     } else if ((t.transfer === 'unmatched' && (isCardPayment(t) || isVenmoCashOut(t))) || (ownAccounts && isOwnTransfer(t))) {
       category = 'transfer';
       why = ownAccounts && isOwnTransfer(t) ? 'transfer between your own accounts (the other account’s statement isn’t imported yet)' : isVenmoCashOut(t) ? 'Venmo cash-out (the bank deposit isn’t imported yet)' : 'card payment (the other account isn’t imported yet)';

@@ -174,7 +174,7 @@ const money = v => { const t = String(v ?? '').trim(); if (!t || t === '-' || t 
 // Returns { transactions, anchors, skipped, unreadable }.
 export function parseMapped(text, map, account) {
   const { rows } = findHeader(text);
-  const skip = (map.skip ?? []).map(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'));
+  const skip = (map.skip ?? []).map(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'));
   const out = [], lines = [];
   let skipped = 0, unreadable = 0;
   for (const r of rows) {
@@ -197,13 +197,13 @@ export function cleanFormats(raw) {
   const str = v => (typeof v === 'string' && v.length <= 80 ? v : undefined);
   return raw.filter(f => f && typeof f.key === 'string' && f.key.length <= 2000 && str(f.date) && (str(f.amount) || (str(f.debit) && str(f.credit))))
     .map(f => ({ key: f.key, date: f.date, description: str(f.description), amount: str(f.amount), debit: str(f.debit), credit: str(f.credit), balance: str(f.balance),
-      outIsPositive: !!f.outIsPositive, skip: Array.isArray(f.skip) ? f.skip.filter(w => typeof w === 'string' && w.length <= 30).slice(0, 20) : [] }))
+      outIsPositive: !!f.outIsPositive, investment: !!f.investment, skip: Array.isArray(f.skip) ? f.skip.filter(w => typeof w === 'string' && w.length <= 30).slice(0, 20) : [] }))
     .slice(0, 50);
 }
 
 // Works out how to read a file by itself: the date column, the amount (one column, or money in and money out), the description and
 // a running balance, from the column names, then checks that the values really read as dates and amounts. null if it can't tell.
-const TRADE_WORDS = /\b(buy|bought|sell|sold|reinvest)/i;
+export const TRADE_SKIP = ['buy', 'bought', 'sell', 'sold', 'purchase', 'purchased', 'sale', 'reinvest', 'redemption', 'redeemed', 'exchange'];
 export function autoMap(text) {
   const { headers, rows } = findHeader(text);
   if (!rows.length) return null;
@@ -228,8 +228,8 @@ export function autoMap(text) {
     const outRows = rows.filter(r => /withdraw|purchase|debit|payment to|sale\b|fee/i.test(Object.values(r).join(' ')) && money(r[map.amount]));
     if (outRows.length >= 2 && outRows.filter(r => money(r[map.amount]) > 0).length / outRows.length > 0.7) map.outIsPositive = true;
   }
-  // an investment file: buys and sells move money inside the account, so leave them out
-  if (rows.some(r => TRADE_WORDS.test(Object.values(r).join(' ')))) { map.skip = ['buy', 'bought', 'sell', 'sold', 'reinvest']; map.balance = undefined; }
+  // columns only a brokerage has: its account is an investment account (buys and sells are then left out when it is read in)
+  map.investment = headers.some(x => /^(symbol|ticker|cusip|quantity|shares|qty|price|security)/i.test(x)) || rows.some(r => /\bdividend|\bshares?\b|\breinvest/i.test(Object.values(r).join(' ')));
   return parseMapped(text, map, 'x').transactions.length ? map : null;
 }
 

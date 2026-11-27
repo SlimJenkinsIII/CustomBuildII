@@ -39,6 +39,15 @@ server.listen(0, async () => {
   check('a brokerage file is read without any questions', (await page.locator('#col-overlay').count()) === 0 && (await page.locator('#ask-overlay').count()) === 0, await status());
   check('it goes into the account its digits name, with the buy left out', /Went into: JPMorgan \(3013\) \(2\)/.test(await status()), await status());
 
+  // the checking side of the deposit says only "JPMORGAN CHASE DEBIT": it still pairs with the brokerage deposit, and the dividend files itself
+  await page.setInputFiles('#file', [write('Chase1044_Activity.CSV', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,01/02/2026,"JPMORGAN CHASE DEBIT",-1000.00,ACH_DEBIT,,\n')]);
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  const pair = (await page.locator('#out tbody tr', { hasText: /JPMORGAN CHASE DEBIT|TRANSFER FROM CHASE CHECKING/ }).allInnerTexts()).map(x => x.replace(/\s+/g, ' '));
+  check('checking to brokerage pairs up as a transfer with no "transfer" wording', pair.length === 2 && pair.every(x => /Transfer \(not spending\)/.test(x) && !/other half not imported/.test(x)), pair.join(' | '));
+  const div = (await page.locator('#out tbody tr', { hasText: 'DIVIDEND VTI' }).allInnerTexts()).join(' ').replace(/\s+/g, ' ');
+  check('a brokerage dividend is filed by itself, not left for review', /Investment gains/.test(div) && !/Needs review/.test(div), div);
+
   // a file with no digits in its name: the account number written at the top of the file is enough
   await page.setInputFiles('#file', [write('activity.csv', BROKER(['02/02/2026,WITHDRAWAL TO CHASE ...1044,Withdrawal,,50.00,53.10']))]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });

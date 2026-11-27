@@ -1,7 +1,7 @@
-import { parseStatement, toCents , findHeader, headerKey, parseMapped, flexDate, cleanFormats, autoMap, accountDigitsInText, accountText } from './parsers.js';
+import { parseStatement, toCents , findHeader, headerKey, parseMapped, flexDate, cleanFormats, autoMap, accountDigitsInText, accountText, TRADE_SKIP } from './parsers.js';
 import { orphanAccounts, moveOrphans, dropAccountLines, withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
 import { matchTransfers } from './transfers.js';
-import { categorize } from './rules.js';
+import { categorize, TRADE } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
 import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
 import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, setType, addAccountOfType } from './accounts.js';
@@ -87,7 +87,12 @@ function recompute() {
   if (repaired !== state.customs) { state.customs = repaired; applyCustoms(state.customs); state.parents = cleanParents(state.parents); applyParents(state.parents); markDirty(); }
   applyCoding(state.coding);
   applyTripNames(state.trips);
-  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(state.raw, state.venmoDetail)), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings() }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
+  // what transfer matching knows about each account: its name, digits and kind
+  const acctInfo = Object.fromEntries(Object.keys(SOURCE_ACCOUNTS).map(k => [k, { name: SOURCE_ACCOUNTS[k].name, last4: last4Of(k), type: typeOf(k) }]));
+  const investing = new Set(Object.keys(SOURCE_ACCOUNTS).filter(k => typeOf(k) === 'investment'));
+  // buys and sells inside an investment account (from files read before they were left out) are not money moving: they are dropped
+  const raw = state.raw.filter(t => t.byHand || !investing.has(t.account) || !TRADE.test(t.description ?? ''));
+  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(raw, state.venmoDetail), { accounts: acctInfo }), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings(), investmentAccounts: investing }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     const pick = migrateCategory(state.overrides[t.id]);
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
@@ -266,7 +271,11 @@ async function importFiles(files) {
       }
       if (!where) { left.push(file.name); continue; }
       if (where.accounts) { state.accounts = where.accounts; recompute(); }
-      parsed = mapping ? { format: 'mapped', ...parseMapped(text, mapping, where.key) } : parseStatement(text, where.key);
+      if (mapping?.investment && typeOf(where.key) !== 'investment' && (SOURCE_ROLES[where.key] ?? 'asset') === 'asset' && !['chase-checking', 'venmo'].includes(where.key)) {
+        state.accounts = setType(state.accounts, where.key, 'investment'); recompute();          // a brokerage file: its account is an investment account
+      }
+      const readAs = mapping && typeOf(where.key) === 'investment' ? { ...mapping, skip: TRADE_SKIP, balance: undefined } : mapping;
+      parsed = readAs ? { format: 'mapped', ...parseMapped(text, readAs, where.key) } : parseStatement(text, where.key);
       const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyForFormat(parsed.format)]);
       state.anchors = mergeAnchors(state.anchors, parsed.anchors);
       {

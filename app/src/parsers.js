@@ -58,7 +58,7 @@ const venmoAmount = text => {
   const negative = s.startsWith('-') || (s.startsWith('(') && s.endsWith(')'));
   return (negative ? -1 : 1) * Math.abs(toCents(s.replace(/^[+-]/, '')));
 };
-const TRANSFER_TYPE = /transfer|cash ?out|withdraw/i;
+const TRANSFER_TYPE = /transfer|cash ?out|withdraw|add(ed)? (funds|money)|top ?up|load|bank deposit/i;
 
 function venmoRows(text) {
   const rows = parseCsv(text);
@@ -86,10 +86,13 @@ export function venmo(rows, account) {
     }
     const party = (cents > 0 ? r['From'] : r['To']) || '';
     const note = r['Note'];
+    // money you moved between Venmo and your bank, either way: out to the bank (a cash-out) or in from the bank (adding money)
     const description = transfer
-      ? `VENMO TRANSFER TO BANK${r['Destination'] ? ` (${r['Destination']})` : ''}`
+      ? (cents < 0 ? `VENMO TRANSFER TO BANK${r['Destination'] ? ` (${r['Destination']})` : ''}` : `VENMO TRANSFER FROM BANK${r['Funding Source'] && !/venmo balance/i.test(r['Funding Source']) ? ` (${r['Funding Source']})` : ''}`)
       : `${cents > 0 ? 'FROM' : 'TO'} ${party.toUpperCase()}${note ? `: ${note}` : ''}`.trim();
-    out.push({ date: r['Datetime'].slice(0, 10), description, cents, account, source: 'venmo' });
+    // an instant transfer's fee, when the file shows it, is kept with the line so the bank side can still be matched
+    const fee = transfer && r['Amount (fee)'] && /\d/.test(r['Amount (fee)']) ? -Math.abs(venmoAmount(r['Amount (fee)'])) : 0;
+    out.push({ date: r['Datetime'].slice(0, 10), description, cents, account, source: 'venmo', ...(fee ? { fee } : {}) });
   }
   return { transactions: out, notes: { external, ignored, details } };
 }

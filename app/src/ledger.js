@@ -28,16 +28,23 @@ const sameCharge = (a, b) => a.date === b.date && a.cents === b.cents && a.descr
 export function mergeIntoAccount(existing, incoming, account, defaultAccount) {
   const claimed = new Set();
   const moved = new Map();                                   // existing id -> the id it would have under `account`
+  const renamed = new Map();                                 // existing id -> the same line, newly worded
   const have = new Set(existing.flatMap(t => [t.id, ...(t.aliases ?? [])]));
   const fresh = [];
   for (const t of incoming) {
     if (have.has(t.id)) continue;
+    // the same Venmo line imported before under different wording (the app now labels money moved to and from the bank): the line
+    // already there takes the new wording and is not added twice
+    const relabel = t.source === 'venmo' && /^VENMO TRANSFER/.test(t.description)
+      && existing.find(e => e.account === account && e.source === 'venmo' && !claimed.has(e.id) && e.date === t.date && e.cents === t.cents && e.description !== t.description);
+    if (relabel) { claimed.add(relabel.id); renamed.set(relabel.id, t); continue; }
     const mine = account !== defaultAccount && existing.find(e => e.account === defaultAccount && !claimed.has(e.id) && !e.byHand && sameCharge(e, t));
     if (mine) { claimed.add(mine.id); moved.set(mine.id, t.id); continue; }
     fresh.push(t);
   }
-  const merged = existing.map(e => (moved.has(e.id) ? { ...e, account, aliases: [...(e.aliases ?? []), moved.get(e.id)] } : e));
-  return { merged: [...merged, ...fresh], addedCount: fresh.length, skippedCount: incoming.length - fresh.length - moved.size, movedCount: moved.size };
+  const merged = existing.map(e => (moved.has(e.id) ? { ...e, account, aliases: [...(e.aliases ?? []), moved.get(e.id)] }
+    : renamed.has(e.id) ? { ...e, description: renamed.get(e.id).description, aliases: [...(e.aliases ?? []), renamed.get(e.id).id] } : e));
+  return { merged: [...merged, ...fresh], addedCount: fresh.length, skippedCount: incoming.length - fresh.length - moved.size, movedCount: moved.size, renamedCount: renamed.size };
 }
 
 // Lines saved under an account that no longer exists (its key is not one of your accounts). They show as account 1999 until you

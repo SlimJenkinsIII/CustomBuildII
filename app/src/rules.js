@@ -24,7 +24,7 @@ export function brokerageKind(t) {
 }
 // Buys and sells inside an investment account move money between cash and shares; they are neither spending nor transfers.
 export const TRADE = /\b(buy|bought|sell|sold|purchase|purchased|sale|reinvest(ment)?|redemption|redeemed|exchange)\b/i;
-export const isVenmoCashOut = t => t.account === 'venmo' && /^VENMO TRANSFER TO BANK/.test(t.description);
+export const isVenmoCashOut = t => t.account === 'venmo' && /^VENMO TRANSFER (TO|FROM) BANK/.test(t.description);
 
 export function isCardPayment(t) {
   if (!PAYMENT_WORDS.test(t.description)) return false;
@@ -93,7 +93,9 @@ export function categorize(transactions, {
 
   return transactions.map(t => {
     let category, why;
-    if (t.transfer === 'matched') {
+    if (t.feeOf) {
+      category = 'other_misc'; why = 'Venmo instant transfer fee';
+    } else if (t.transfer === 'matched') {
       const other = byId.get(t.pairId);
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';

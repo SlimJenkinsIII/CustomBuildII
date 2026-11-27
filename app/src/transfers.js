@@ -14,6 +14,9 @@ const HINT = /payment|pymt|transfer|xfer|epayment|autopay|zelle|venmo|cash app|p
 const GENERIC = new Set(['chase', 'bank', 'account', 'checking', 'checkings', 'savings', 'credit', 'card', 'the', 'and', 'high', 'yield']);
 const MAX_DAYS = 5;
 const CASH_OUT = /^VENMO TRANSFER TO BANK/;
+const VENMO_MOVE = /^VENMO TRANSFER (TO|FROM) BANK/;
+// Venmo's instant transfer to a bank takes a fee (1.75%, at least 25 cents, at most $25), so the bank receives a little less.
+const instantFee = cents => Math.min(2500, Math.max(25, Math.round(Math.abs(cents) * 0.0175)));
 const TXN_NO = /transaction\s*#\s*:?\s*(\d{6,})/i;
 
 const dayNumber = iso => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000);
@@ -33,15 +36,27 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {}
   const candidates = [];
   for (const o of outs) {
     for (const i of ins) {
-      if (o.account === i.account || o.cents !== -i.cents) continue;
+      if (o.account === i.account) continue;
       // A Venmo payment to or from a friend is not a transfer between your own accounts, even if a bank line has the same amount.
-      // Only a cash-out from the Venmo balance can be one half of a transfer.
-      if ((o.account === 'venmo' && !CASH_OUT.test(o.description)) || (i.account === 'venmo' && !CASH_OUT.test(i.description))) continue;
+      // Only money moved between Venmo and a bank (a cash-out, or adding money) can be one half of a transfer.
+      // Money added to Venmo from checking: a Venmo "money in" line, the same amount as a checking line that says VENMO (and isn't
+      // a payment to someone) a few days apart. Older imports show it as money from a person, so the bank's wording decides.
+      const addFunds = i.account === 'venmo' && o.account !== 'venmo' && /venmo/i.test(o.description) && !/payment|\bpmt\b/i.test(o.description);
+      if ((o.account === 'venmo' && !VENMO_MOVE.test(o.description)) || (i.account === 'venmo' && !VENMO_MOVE.test(i.description) && !addFunds)) continue;
+      // equal and opposite, or a Venmo cash-out whose bank deposit is short by the instant-transfer fee
+      let fee = 0;
+      if (o.cents !== -i.cents) {
+        const short = -o.cents - i.cents;
+        const feeOk = o.account === 'venmo' && CASH_OUT.test(o.description) && /venmo/i.test(i.description) && short > 0
+          && (o.fee ? short === -o.fee : short <= instantFee(o.cents));
+        if (!feeOk) continue;
+        fee = short;
+      }
       const gap = Math.abs(dayNumber(o.date) - dayNumber(i.date));
       const invest = accounts[o.account]?.type === 'investment' || accounts[i.account]?.type === 'investment';
       if (gap > (invest ? maxDays + 3 : maxDays)) continue;
       const hinted = HINT.test(o.description) || HINT.test(i.description) || names(o, i.account) || names(i, o.account) || putAway(o.account) || putAway(i.account);
-      candidates.push({ o, i, gap, hinted });
+      candidates.push({ o, i, gap, hinted, fee });
     }
   }
   // Best first: wording evidence, then closest dates. Each transaction can be used only once.
@@ -67,15 +82,20 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {}
     if (used.has(c.o.id) || used.has(c.i.id)) continue;
     used.add(c.o.id); used.add(c.i.id);
     const transfer = c.hinted ? 'matched' : 'suggested';
-    info.set(c.o.id, { transfer, pairId: c.i.id });
+    info.set(c.o.id, { transfer, pairId: c.i.id, ...(c.fee ? { feeSplit: c.fee } : {}) });
     info.set(c.i.id, { transfer, pairId: c.o.id });
   }
 
-  return transactions.map(t => {
+  return transactions.flatMap(t => {
     const found = info.get(t.id);
-    if (found) return { ...t, ...found };
-    if (HINT.test(t.description)) return { ...t, transfer: 'unmatched' };
-    return t;
+    if (found?.feeSplit) {
+      // the cash-out is split: what reached the bank is the transfer, the rest is Venmo's fee
+      const { feeSplit, ...rest } = found;
+      return [{ ...t, ...rest, cents: t.cents + feeSplit }, { ...t, id: `${t.id}#fee`, cents: -feeSplit, description: 'VENMO INSTANT TRANSFER FEE', feeOf: t.id }];
+    }
+    if (found) return [{ ...t, ...found }];
+    if (HINT.test(t.description)) return [{ ...t, transfer: 'unmatched' }];
+    return [t];
   });
 }
 

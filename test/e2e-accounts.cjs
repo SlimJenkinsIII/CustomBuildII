@@ -44,7 +44,7 @@ server.listen(0, async () => {
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' || /Content Security Policy/i.test(m.text())) problems.push(m.text()); });
   await page.goto(`http://localhost:${server.address().port}/`);
-  const gl = async () => { await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); };
+  const gl = async () => { await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); };
   const glRows = text => page.locator('#out tbody tr', { hasText: text });
   const status = () => page.textContent('#status');
 
@@ -53,7 +53,7 @@ server.listen(0, async () => {
   check('a file with no digits goes to the one account that exists, as before', /Added 4 transactions/.test(await status()), await status());
 
   // code the interest by hand, as the user did
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   await page.locator('#code-rows tr', { hasText: 'LOYALTY REWARD' }).first().locator('input[type=checkbox]').check();
   await page.selectOption('#code-choose', 'other_interest'); await page.click('#code-apply');
   await page.waitForFunction(() => /coded as/.test(document.getElementById('code-note').textContent));
@@ -102,7 +102,7 @@ server.listen(0, async () => {
   check('and next time that file is recognised without asking', (await page.locator('#ask-overlay').count()) === 0);
 
   // the Balance Sheet lists the accounts, each with its own balance
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
   await page.click('#fs-bs .expand-all');
   const bs = await page.locator('#fs-bs').textContent();
   check('the Balance Sheet shows each account on its own', ['Chase Checkings (1044)', 'Chase Savings (8527)', 'Chase Savings (1899)'].every(n => bs.includes(n)));
@@ -124,7 +124,7 @@ server.listen(0, async () => {
   const vcode = (await page.textContent('#acct-list')).match(/(\d{4}) · 5 items\s*Venmo/)[1];
   check('Venmo now sits under Checking, and its number follows (the next ten under it)', Number(vcode) > Number(head) && Number(vcode) < Number(head) + 100 && vcode.endsWith('0'), `${head} -> ${vcode}`);
   await page.click('#settings-close');
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
   await page.click('#fs-bs .expand-all');
   check('on the Balance Sheet, Venmo is indented under Checking', (await page.locator('#fs-bs tr:has-text("Venmo balance") td.acct.sub-acct').count()) === 1);
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
@@ -151,7 +151,7 @@ server.listen(0, async () => {
   check('the Coinbase placeholder was matched to the new Coinbase account as well', true);
   check('the hand-made one is gone from the offer', !/Venmo cash/.test((await page.locator('#matchup-box .acct-meta').allTextContents()).join(' ')));
   await page.click('#settings-close');
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs');
   await page.click('#fs-bs .expand-all');
   const bs2 = await page.locator('#fs-bs').textContent();
   check('the Balance Sheet lists it once, under the hand-made name and number', (bs2.match(/Venmo cash/g) ?? []).length === 1 && bs2.includes(mine));
@@ -162,7 +162,7 @@ server.listen(0, async () => {
   await gl();
   const lone = (await glRows('transaction#: 77777').allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
   check('a transfer to a savings account with no statement yet is a transfer, not a made-up Chase Savings', lone.length === 1 && /Transfer \(not spending\)/.test(lone[0]) && !/1210 Chase Savings|1010 Chase Savings/.test(lone[0]), lone.join(' | '));
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs'); await page.click('#fs-bs .expand-all');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'bs'); await page.click('#fs-bs .expand-all');
   const acctCells = (await page.locator('#fs-bs td.acct').allInnerTexts()).map(t => t.replace(/^[▸▾\s]*\d{4}\s*/, '').trim());
   check('no empty "Chase Savings" placeholder sits on the Balance Sheet next to the real ones', !acctCells.includes('Chase Savings'), acctCells.filter(t => /Savings/.test(t)).join(' | '));
   // a placeholder can be removed for good

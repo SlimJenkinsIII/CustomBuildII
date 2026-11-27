@@ -55,7 +55,7 @@ server.listen(0, async () => {
   // Locked devices show the home picture first: swipe up (here: tap the hint) to reach the passphrase box.
   const openHome = async () => { if (await page.locator('#home').isVisible() && !(await page.evaluate(() => document.documentElement.hasAttribute('data-open')))) { await page.click('#home-hint'); await page.waitForTimeout(500); } };
   const glRow = text => page.locator('#out tbody tr', { hasText: text }).first();
-  const goFS = async pg => { await page.click('#tab-fs'); await page.selectOption('#fs-page', pg); };
+  const goFS = async pg => { await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', pg); };
   const onGL = async () => (await page.getAttribute('#tab-fs', 'aria-selected')) === 'true' && (await page.inputValue('#fs-page')) === 'gl';
 
   // ---------- layout ----------
@@ -86,11 +86,20 @@ server.listen(0, async () => {
   const labels = await page.locator('[role=tab]').allTextContents();
   check('seven tabs in the right order, with Coding after Budget', labels.join('|') === 'Summary|Budget|Coding|Investments|Savings|F/S|Tie-out', labels.join('|'));
   check('Budget is the landing tab', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
+  // the pages live in a list that slides out from the left: closed until the menu button is tapped
+  check('the list of pages is tucked away until the menu is tapped', !(await page.locator('#tab-budget').isVisible()) && (await page.getAttribute('#menu-btn', 'aria-expanded')) === 'false');
+  await page.click('#menu-btn');
+  check('tapping the menu slides the pages out', await page.locator('#tab-summary').isVisible() && (await page.getAttribute('#menu-btn', 'aria-expanded')) === 'true');
+  await page.keyboard.press('Escape');
+  check('Escape closes it again', !(await page.locator('#tab-summary').isVisible()));
+  await page.click('#menu-btn'); await page.click('#drawer-scrim', { position: { x: 900, y: 400 } });
+  check('tapping outside the list closes it', !(await page.locator('#tab-summary').isVisible()));
   for (const t of ['summary', 'investments', 'savings']) {
-    await page.click(`#tab-${t}`);
+    await page.click('#menu-btn'); await page.click(`#tab-${t}`);
+    check(`choosing ${t} closes the list and says which page you are on`, !(await page.locator('#tab-summary').isVisible()) && (await page.textContent('#page-name')).length > 0);
     check(`${t} tab is a placeholder`, (await page.locator(`#panel-${t}`).textContent()).includes('Coming later'));
   }
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   await page.click('#gear');
   const menu = (await page.locator('#settings-body .menu-row').allTextContents()).join(' | ');
   check('settings has TB coding, Trips, Saving & backup, Dummy numbers', /TB coding/.test(menu) && /Trips/.test(menu) && /Saving & backup/.test(menu) && /Dummy numbers/.test(menu));
@@ -404,7 +413,7 @@ server.listen(0, async () => {
   check('GL account filter works', (await page.locator('#out tbody tr').count()) > 0 && (await page.locator('#out tbody tr').allInnerTexts()).every(t => t.includes('5455 Groceries')));
   await page.click('text=Clear all filters');
   // ---------- the Coding tab: many items at once ----------
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   const toReview = await page.locator('#code-rows tr .merchant').count();
   check('the Coding tab lists what still needs review, and the tab shows how many', toReview > 0 && new RegExp(`Coding · ${toReview}$`).test(await page.textContent('#tab-code')), `${toReview}`);
   check('the account choices are in number order', await page.locator('#code-choose option').evaluateAll(os => { const c = os.map(o => o.textContent.replace(/\u00a0/g, '').trim().match(/^(\d{4})/)?.[1]).filter(Boolean); return c.length > 20 && c.join() === [...c].sort().join(); }));
@@ -453,7 +462,7 @@ server.listen(0, async () => {
     await page.waitForFunction(() => /Undone/.test(document.getElementById('code-note').textContent));
     check('Undo also forgets what that taught', (await page.locator('#code-rows tr', { hasText: 'MAGNOLIA CAFE' }).count()) === magCount);
   } else check('the sample data has two charges from one unknown merchant to learn from', false, String(magCount));
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const mag = glRow('MAGNOLIA CAFE');
   check('unknown merchant starts in review, an expense account (5900)', (await mag.innerText()).includes('5900'));
   await mag.locator('.linkbtn').click();
@@ -487,7 +496,7 @@ server.listen(0, async () => {
 
 
   // ---------- drill down from Budget and come back ----------
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   await page.locator('#where .catrow').first().click();
   check('tapping a category opens GL Detail, filtered', (await onGL()) && /\d+ of 76/.test(await page.textContent('#gl-count')));
   check('there is a Back button', /Back to Budget/.test(await page.textContent('#gl-back')));
@@ -495,7 +504,7 @@ server.listen(0, async () => {
   check('Back returns to Budget', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');
 
   // ---------- tie-out, and a savings move logged by hand ----------
-  await page.click('#tab-tie');
+  await page.click('#menu-btn'); await page.click('#tab-tie');
   await page.selectOption('#tie-period', '2026-01');
   check('tie-out ties to the checking account', /Ties to your checking/.test(await page.textContent('#tie .check')));
   await page.locator('#tie-savings summary').click();
@@ -553,10 +562,10 @@ server.listen(0, async () => {
   check('the deleted account stayed deleted', (await page.locator('#code-sub_gym').count()) === 0);
   check('the new name and the sub account survived', (await page.inputValue('#name-free_coffee')) === 'Cafes' && (await page.locator('#settings-body input.name[value="Roth IRA"]').count()) === 1 && (await page.inputValue('#code-' + (await page.locator('#settings-body input.name[value="Netflix"]').getAttribute('id')).replace('name-', ''))) === '5230');
   await closeSheet();
-  await page.click('#tab-budget'); await page.click('#plan-details summary');
+  await page.click('#menu-btn'); await page.click('#tab-budget'); await page.click('#plan-details summary');
   await goFS('tb');
   check('opening balances survived', (await cells('Chase Savings'))[1] === '5,000');
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   check('plan survived', (await page.inputValue('#plan-income')) === '5000' && (await page.inputValue('#plan-save_chase')) === '500');
 
   // ---------- dummy numbers ----------
@@ -574,7 +583,7 @@ server.listen(0, async () => {
   check('adding statements is off while dummy numbers show', await page.locator('#add-btn').isHidden());
   const storedDuringDemo = await envelopeText();
   check('your saved data is untouched during dummy mode', storedDuringDemo === storedBeforeDemo);
-  await page.click('#tab-budget'); await page.fill('#plan-income', '9999'); await page.press('#plan-income', 'Tab');
+  await page.click('#menu-btn'); await page.click('#tab-budget'); await page.fill('#plan-income', '9999'); await page.press('#plan-income', 'Tab');
   await page.waitForTimeout(700);
   check('edits made on dummy numbers are never saved', (await envelopeText()) === storedBeforeDemo);
   await gear('Saving & backup');
@@ -605,7 +614,7 @@ server.listen(0, async () => {
   await closeSheet();
   await goFS('gl');
   check('your own data is back, exactly as it was', (await txCount()) === n && (await glRow('MAGNOLIA CAFE').innerText()).includes('5400 Restaurants'));
-  check('and the plan edit made on dummy numbers is gone', true && (await (async () => { await page.click('#tab-budget'); return (await page.inputValue('#plan-income')) === '5000'; })()));
+  check('and the plan edit made on dummy numbers is gone', true && (await (async () => { await page.click('#menu-btn'); await page.click('#tab-budget'); return (await page.inputValue('#plan-income')) === '5000'; })()));
 
   // ---------- backup, erase, restore ----------
   await gear('Saving & backup');

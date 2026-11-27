@@ -1799,6 +1799,7 @@ function applyTab() {
   for (const [id] of FS_PAGES) $(`page-${id}`).hidden = state.fsPage !== id;
   $('fs-page').value = state.fsPage;
   $('empty').hidden = has || !NEEDS_DATA.has(state.tab);
+  $('page-name').textContent = $(`tab-${state.tab}`)?.textContent ?? '';
 }
 
 function setTab(tab) {
@@ -1809,7 +1810,21 @@ function setTab(tab) {
   if (tab === 'budget' && state.txs.length) renderBudget(asOfDate(state.txs), false);   // redraw the charts at this screen's width
   applyTab();
 }
-for (const name of TABS) $(`tab-${name}`).addEventListener('click', () => setTab(name));
+for (const name of TABS) $(`tab-${name}`).addEventListener('click', () => { setTab(name); closeDrawer(false); });
+
+// The list of pages slides out from the left. Tap the menu button to open it; tap a page, outside it, or press Escape to close.
+function openDrawer() {
+  $('drawer').classList.add('open'); $('drawer-scrim').hidden = false; $('menu-btn').setAttribute('aria-expanded', 'true');
+  ($(`tab-${state.tab}`) ?? $('drawer').querySelector('.tab'))?.focus();
+}
+function closeDrawer(focusBack = true) {
+  if (!$('drawer').classList.contains('open')) return;
+  $('drawer').classList.remove('open'); $('drawer-scrim').hidden = true; $('menu-btn').setAttribute('aria-expanded', 'false');
+  if (focusBack) $('menu-btn').focus();
+}
+$('menu-btn').addEventListener('click', () => ($('drawer').classList.contains('open') ? closeDrawer() : openDrawer()));
+$('drawer-scrim').addEventListener('click', () => closeDrawer());
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('drawer').classList.contains('open')) closeDrawer(); });
 
 function setFsPage(page) {
   state.fsPage = page;
@@ -1834,6 +1849,8 @@ function render() {
   syncHome();
   $('lock').hidden = !state.locked;
   $('app').hidden = state.locked;
+  $('menu-btn').hidden = state.locked;                  // nothing to choose between while the budget is locked
+  if (state.locked) closeDrawer(false);
   $('add-btn').hidden = state.locked || state.demo;
   if (state.locked) {
     for (const id of ['bgt-summary', 'bgt-weeks', 'bgt-savings', 'monthcard', 'where', 'habits', 'fs-tb', 'fs-bs', 'fs-is', 'plan-body', 'chips', 'gl-controls', 'coverage', 'code-body']) $(id).replaceChildren();

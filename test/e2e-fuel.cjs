@@ -31,7 +31,7 @@ server.listen(0, async () => {
   await page.setInputFiles('#file', [path.join(ROOT, 'samples', 'FAKE-jan-feb-amex.csv'), tmp]);
   await page.waitForSelector('#panel-budget:not([hidden])');
 
-  const gl = async () => { await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); };
+  const gl = async () => { await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); };
   const row = (text, amount) => page.locator('#out tbody tr', { hasText: text }).filter({ hasText: amount }).first();
   const cat = async (text, amount) => (await row(text, amount).innerText()).replace(/\s+/g, ' ');
 
@@ -47,7 +47,7 @@ server.listen(0, async () => {
   await gl();
   check('before turning it on, a small Shell charge is gas like the rest', /5490/.test(await cat('SHELL OIL', '8.50')), await cat('SHELL OIL', '8.50'));
 
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   await page.click('#code-fuel summary');
   check('the account that looks like a convenience store is picked for you', (await page.locator('#fuel-below option:checked').textContent()).includes('convenient store'));
   check('the cutoff starts at $25', (await page.inputValue('#fuel-cutoff')) === '25');
@@ -60,11 +60,11 @@ server.listen(0, async () => {
   check('a fill-up stays as gas', /5490/.test(await cat('SHELL OIL', '52.00')), await cat('SHELL OIL', '52.00'));
 
   // moving the cutoff moves the charges, past ones included
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   await page.fill('#fuel-cutoff', '60'); await page.press('#fuel-cutoff', 'Tab');
   await gl();
   check('raising the cutoff to $60 moves the $52 charge too', /convenient store/.test(await cat('SHELL OIL', '52.00')), await cat('SHELL OIL', '52.00'));
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   await page.fill('#fuel-cutoff', '25'); await page.press('#fuel-cutoff', 'Tab');
 
   // your own choice on one charge beats the split
@@ -76,7 +76,7 @@ server.listen(0, async () => {
   check('and coding it does not recode the merchant\'s other charges', /5490/.test(await cat('SHELL OIL', '52.00')) && /convenient store/.test(await cat('QT 421', '12.25')));
 
   // off again: back to gas
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   await page.click('#fuel-on');
   await gl();
   check('turning it off sends small charges back to gas', /5490/.test(await cat('QT 421', '12.25')), await cat('QT 421', '12.25'));

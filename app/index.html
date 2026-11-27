@@ -140,9 +140,23 @@
     .habit-card .none { color: var(--muted); font-size: 14px; }
 
     /* tabs */
-    .tabs { display: flex; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px; align-self: flex-start; }
-    .tab { font: inherit; font-size: 14px; font-weight: 600; color: var(--ink-2); background: none; border: 0; border-radius: 999px; padding: 7px 16px; cursor: pointer; }
+    /* pages: a menu button, and the list of pages slides out from the left */
+    .top-title { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+    .top-title #menu-btn { margin-top: 2px; flex: none; }
+    .page-name { font-weight: 600; color: var(--ink-2); }
+    .page-name:not(:empty)::before { content: "· "; }
+    .drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 60; width: min(280px, 82vw); box-sizing: border-box;
+      padding: calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+      background: var(--card); border-right: 1px solid var(--line); box-shadow: 0 10px 40px rgba(0,0,0,.18);
+      transform: translateX(-105%); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; overflow-y: auto; }
+    .drawer.open { transform: none; visibility: visible; transition: transform .22s ease; }
+    .drawer-title { margin: 0 6px 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .drawer-scrim { position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,.32); }
+    .tabs { display: flex; flex-direction: column; gap: 4px; }
+    .tab { font: inherit; font-size: 16px; font-weight: 600; color: var(--ink); background: none; border: 0; border-radius: 12px; padding: 12px 14px; min-height: 44px; cursor: pointer; text-align: left; }
+    .tab:hover { background: var(--bg); }
     .tab[aria-selected="true"] { background: var(--blue); color: #fff; }
+    @media (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition: none; } }
     .panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
     /* month-by-month table */
@@ -177,9 +191,7 @@
     .coa-status.planned { font-style: italic; }
 
     /* tabs: six of them, scrollable on a phone */
-    .tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-    .tabs::-webkit-scrollbar { display: none; }
-    .tab { white-space: nowrap; flex: none; }
+
     .placeholder { align-items: flex-start; }
     .placeholder p { color: var(--muted); font-size: 14px; max-width: 52ch; }
 
@@ -429,9 +441,14 @@
   <noscript><p style="padding:16px">This app needs JavaScript to run.</p></noscript>
   <main>
     <header class="top">
-      <div>
-        <h1>My Budget</h1>
+      <div class="top-title">
+        <button class="iconbtn" id="menu-btn" type="button" aria-label="Open the list of pages" aria-expanded="false" aria-controls="drawer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div>
+        <h1>My Budget <span class="page-name" id="page-name"></span></h1>
         <p class="sub" id="asof">Your weekly and monthly spending, in one place.</p>
+        </div>
       </div>
       <div class="top-actions">
         <span class="savechip" id="savechip" hidden></span>
@@ -468,7 +485,10 @@
     </section>
 
     <div id="app" style="display:flex;flex-direction:column;gap:16px">
-      <div class="tabs" role="tablist" aria-label="Views">
+      <div class="drawer-scrim" id="drawer-scrim" hidden></div>
+      <nav class="drawer" id="drawer" aria-label="Pages">
+      <p class="drawer-title">Pages</p>
+      <div class="tabs" role="tablist" aria-label="Views" aria-orientation="vertical">
         <button class="tab" role="tab" id="tab-summary" aria-selected="false" aria-controls="panel-summary" type="button">Summary</button>
         <button class="tab" role="tab" id="tab-budget" aria-selected="true" aria-controls="panel-budget" type="button">Budget</button>
         <button class="tab" role="tab" id="tab-code" aria-selected="false" aria-controls="panel-code" type="button">Coding</button>
@@ -477,6 +497,7 @@
         <button class="tab" role="tab" id="tab-fs" aria-selected="false" aria-controls="panel-fs" type="button">F/S</button>
         <button class="tab" role="tab" id="tab-tie" aria-selected="false" aria-controls="panel-tie" type="button">Tie-out</button>
       </div>
+      </nav>
       <div class="notice" id="syncbanner" hidden></div>
       <div class="notice" id="savebanner" hidden>
         <span>Your data isn't saved yet. Set a passphrase to keep it on this device.</span>

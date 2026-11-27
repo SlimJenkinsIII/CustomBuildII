@@ -38,7 +38,7 @@ server.listen(0, async () => {
   check('the Venmo file imports', /Added \d+ transactions/.test(status), status);
   check('it says one bank-funded payment was left out, and why', /1 Venmo payment you funded from a bank or card was not counted again/.test(status));
 
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const rows = await page.locator('#out tbody tr', { hasText: 'Venmo balance' }).allInnerTexts();
   check('Venmo shows as its own account in GL Detail, with the bank-funded payment moving in and out of it', rows.length === 9, `${rows.length} rows`);   // 5 from the Venmo file, and in-and-out for each of the two VENMO PAYMENT lines on checking
   check('a friend paying you is left for you to sort', rows.some(t => /FROM PAT EXAMPLE/.test(t) && /5900/.test(t)), rows.filter(t => /PAT EXAMPLE/.test(t)).join(' | ').replace(/\s+/g, ' '));
@@ -58,7 +58,7 @@ server.listen(0, async () => {
   check('Venmo balance can be given an opening balance, like checking', /Venmo balance/.test(await page.textContent('#settings-body')));
   await page.click('#settings-close');
 
-  await page.click('#tab-code');
+  await page.click('#menu-btn'); await page.click('#tab-code');
   check('the Venmo items that need sorting show up in the Coding tab', (await page.locator('#code-rows tr', { hasText: 'SAM SAMPLE' }).count()) === 1);
 
   check('no errors or security-policy violations', problems.length === 0, JSON.stringify(problems));

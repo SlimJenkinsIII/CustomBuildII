@@ -38,7 +38,7 @@ server.listen(0, async () => {
   await page.waitForFunction(() => /Added 5 transactions/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
 
   // the plan: pay details from one paystub, and a savings target for the savings account
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   await page.locator('#plan-details summary').click();
   await page.selectOption('#pay-every', 'biweekly');
   await page.fill('#pay-gross', '4000'); await page.fill('#pay-take', '2700'); await page.fill('#pay-pct', '10'); await page.fill('#pay-match', '4'); await page.fill('#pay-limit', '24500');
@@ -73,7 +73,7 @@ server.listen(0, async () => {
   await page.click('#acct-new-add');
   await page.waitForFunction(() => /Added Emergency fund/.test(document.getElementById('settings-body').textContent));
   await page.click('#settings-close');
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   check('an account you add appears in the savings part of the plan', (await page.locator('#plan-acct-checking-7777').count()) === 1);
   await page.fill('#plan-acct-checking-7777', '100'); await page.press('#plan-acct-checking-7777', 'Tab');
   check('its target comes out of free cash', /Free cash: \$1,900 a month/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
@@ -81,7 +81,7 @@ server.listen(0, async () => {
   await page.click('#acctremove-checking-7777'); await page.click('#acctremove-checking-7777');
   await page.waitForFunction(() => /are removed/.test(document.getElementById('settings-body').textContent));
   await page.click('#settings-close');
-  await page.click('#tab-budget');
+  await page.click('#menu-btn'); await page.click('#tab-budget');
   check('remove the account and it leaves the plan, and its target stops counting', (await page.locator('#plan-acct-checking-7777').count()) === 0 && /Free cash: \$2,000 a month/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
 
   check('no errors', problems.length === 0, JSON.stringify(problems));

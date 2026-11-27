@@ -42,7 +42,7 @@ server.listen(0, async () => {
   // the checking side of the deposit says only "JPMORGAN CHASE DEBIT": it still pairs with the brokerage deposit, and the dividend files itself
   await page.setInputFiles('#file', [write('Chase1044_Activity.CSV', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,01/02/2026,"JPMORGAN CHASE DEBIT",-1000.00,ACH_DEBIT,,\n')]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const pair = (await page.locator('#out tbody tr', { hasText: /JPMORGAN CHASE DEBIT|TRANSFER FROM CHASE CHECKING/ }).allInnerTexts()).map(x => x.replace(/\s+/g, ' '));
   check('checking to brokerage pairs up as a transfer with no "transfer" wording', pair.length === 2 && pair.every(x => /Transfer \(not spending\)/.test(x) && !/other half not imported/.test(x)), pair.join(' | '));
   const div = (await page.locator('#out tbody tr', { hasText: 'DIVIDEND VTI' }).allInnerTexts()).join(' ').replace(/\s+/g, ' ');
@@ -63,7 +63,7 @@ server.listen(0, async () => {
   await page.setInputFiles('#file', [hysa]);
   await page.waitForFunction(() => /Added 2 transactions/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
   check('an Amex savings file goes into the savings account without questions, money in as money in', (await page.locator('#col-overlay').count()) === 0 && /Went into: Amex High-Yield Savings \(6348\) \(2\)/.test(await status()), await status());
-  await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
+  await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const gl = (await page.locator('#out tbody tr', { hasText: 'TRANSFER FROM CHECKING' }).allInnerTexts()).join(' ').replace(/\s+/g, ' ');
   check('the deposit shows as money in to the savings account', /Amex High-Yield Savings \(6348\)/.test(gl) && /\$500\.00/.test(gl) && !/−\$500/.test(gl), gl);
 

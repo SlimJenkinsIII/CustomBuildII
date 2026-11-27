@@ -47,7 +47,7 @@ server.listen(0, async () => {
   };
   const gear = async (page, screen) => { await page.click('#gear'); if (screen) await page.locator('#settings-body .menu-row', { hasText: screen }).click(); };
   const close = page => page.click('#settings-close');
-  const count = async page => { await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); return Number((await page.textContent('#gl-count')).match(/(\d+)/)[1]); };
+  const count = async page => { await page.click('#menu-btn'); await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl'); return Number((await page.textContent('#gl-count')).match(/(\d+)/)[1]); };
 
   // ----- device A: has data, sets a passphrase, turns sync on -----
   const A = await device('A');

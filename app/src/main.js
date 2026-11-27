@@ -1,4 +1,4 @@
-import { parseStatement, toCents , findHeader, headerKey, parseMapped, flexDate, cleanFormats } from './parsers.js';
+import { parseStatement, toCents , findHeader, headerKey, parseMapped, flexDate, cleanFormats, autoMap, accountDigitsInText, accountText } from './parsers.js';
 import { orphanAccounts, moveOrphans, dropAccountLines, withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
@@ -212,9 +212,12 @@ function askColumns(fileName, text) {
 }
 
 // Which of your accounts a file belongs to: by its digits, else the only account it could be, else ask.
-async function accountForUpload(file, format) {
+async function accountForUpload(file, format, text = '') {
   const options = accountsForFormat(format);
-  const named = accountForFile(file.name);
+  const inName = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));
+  const byTb = inName.map(d => options.find(k => SOURCE_ACCOUNTS[k].code === d)).find(Boolean);          // your TB number in the name
+  const inside = accountDigitsInText(accountText(text)).map(d => options.find(k => last4Of(k) === d)).filter(Boolean);
+  const named = accountForFile(file.name) ?? byTb ?? (new Set(inside).size === 1 ? inside[0] : null);
   if (named) {
     if (!options.includes(named)) { const e = new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which can't take this kind of file (${kindOfFile(format)}).`); e.mismatch = true; throw e; }
     return { key: named };
@@ -243,23 +246,23 @@ async function importFiles(files) {
       catch (err) {
         if (!err.unknown) throw new Error(`${file.name}: ${err.message}`);
         const key = headerKey(findHeader(text).headers);
-        mapping = state.formats.find(f => f.key === key) ?? await askColumns(file.name, text);
+        mapping = state.formats.find(f => f.key === key) ?? autoMap(text) ?? await askColumns(file.name, text);
         if (!mapping) { left.push(file.name); continue; }
         if (!state.formats.some(f => f.key === mapping.key)) state.formats = [...state.formats, mapping];
         parsed = { format: 'mapped', ...parseMapped(text, mapping, '') };
       }
       let where;
-      try { where = await accountForUpload(file, parsed.format); }
+      try { where = await accountForUpload(file, parsed.format, text); }
       catch (err) {
         // looks like a card file, but its digits are a bank or savings account (an Amex savings file has the same columns as the card):
         // read it by its columns instead
         if (!err.mismatch || mapping) throw err;
         const key = headerKey(findHeader(text).headers);
-        mapping = state.formats.find(f => f.key === key) ?? await askColumns(file.name, text);
+        mapping = state.formats.find(f => f.key === key) ?? autoMap(text) ?? await askColumns(file.name, text);
         if (!mapping) { left.push(file.name); continue; }
         if (!state.formats.some(f => f.key === mapping.key)) state.formats = [...state.formats, mapping];
         parsed = { format: 'mapped', ...parseMapped(text, mapping, '') };
-        where = await accountForUpload(file, 'mapped');
+        where = await accountForUpload(file, 'mapped', text);
       }
       if (!where) { left.push(file.name); continue; }
       if (where.accounts) { state.accounts = where.accounts; recompute(); }

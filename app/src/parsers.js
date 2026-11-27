@@ -144,11 +144,12 @@ export function parseStatement(text, account = '') {
 // first 15, that has a date-like heading and at least two other headings.
 export function findHeader(text) {
   const rows = parseCsv(text);
+  const all = rows;
   const at = rows.slice(0, 15).findIndex(r => r.filter(c => c.trim()).length >= 3 && r.some(c => /date/i.test(c)));
   const i = at < 0 ? 0 : at;
   const headers = (rows[i] ?? []).map(c => c.trim());
   const body = rows.slice(i + 1).filter(r => r.filter(c => c.trim()).length >= 2);
-  return { headers, rows: body.map(r => Object.fromEntries(headers.map((k, j) => [k, (r[j] ?? '').trim()]))) };
+  return { headers, preamble: all.slice(0, i).map(r => r.join(' ')).join('\n'), rows: body.map(r => Object.fromEntries(headers.map((k, j) => [k, (r[j] ?? '').trim()]))) };
 }
 // A stable fingerprint of a file's columns, so the same kind of file is read the same way next time.
 export const headerKey = headers => headers.map(h => h.toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean).join('|');
@@ -199,3 +200,46 @@ export function cleanFormats(raw) {
       outIsPositive: !!f.outIsPositive, skip: Array.isArray(f.skip) ? f.skip.filter(w => typeof w === 'string' && w.length <= 30).slice(0, 20) : [] }))
     .slice(0, 50);
 }
+
+// Works out how to read a file by itself: the date column, the amount (one column, or money in and money out), the description and
+// a running balance, from the column names, then checks that the values really read as dates and amounts. null if it can't tell.
+const TRADE_WORDS = /\b(buy|bought|sell|sold|reinvest)/i;
+export function autoMap(text) {
+  const { headers, rows } = findHeader(text);
+  if (!rows.length) return null;
+  const sample = rows.slice(0, 50);
+  const share = (col, ok) => sample.filter(r => r[col] !== undefined && r[col] !== '').filter(r => ok(r[col])).length / Math.max(1, sample.filter(r => r[col] !== undefined && r[col] !== '').length);
+  const filled = col => sample.filter(r => r[col]).length / sample.length;
+  const isMoney = v => money(v) !== null;
+  const named = (re, ok) => headers.filter(x => re.test(x)).find(x => filled(x) > 0 && share(x, ok) >= 0.8);
+  const date = named(/trade date|transaction date|posting date|post date|^date$|date/i, v => !!flexDate(v));
+  if (!date) return null;
+  // separate money-in and money-out columns win when a file has both; otherwise one amount column (never an "in" or "out" one alone)
+  const credit = named(/credit|deposit|money in|amount in|\bin\b/i, isMoney), debit = named(/debit|withdraw|money out|amount out|\bout\b/i, isMoney);
+  const pair = credit && debit && credit !== debit;
+  const amount = pair ? undefined : headers.filter(x => /^amount$|net amount|amount \(.*\)|^amount|value|^net$/i.test(x) && !/\b(in|out)\b|credit|debit|deposit|withdraw/i.test(x))
+    .find(x => filled(x) > 0 && share(x, isMoney) >= 0.8);
+  if (!amount && !pair) return null;
+  const description = headers.find(x => /desc|details|memo|payee|^name$|merchant|action|transaction$/i.test(x) && filled(x) > 0.5);
+  const balance = headers.find(x => /balance/i.test(x) && share(x, isMoney) >= 0.8);
+  const map = { key: headerKey(headers), date, description, amount: amount || undefined, credit: amount ? undefined : credit, debit: amount ? undefined : debit, balance, outIsPositive: false, skip: [] };
+  // which way the amounts go: if rows that say they are money out (withdrawal, purchase, payment, debit) are mostly positive, flip
+  if (map.amount) {
+    const outRows = rows.filter(r => /withdraw|purchase|debit|payment to|sale\b|fee/i.test(Object.values(r).join(' ')) && money(r[map.amount]));
+    if (outRows.length >= 2 && outRows.filter(r => money(r[map.amount]) > 0).length / outRows.length > 0.7) map.outIsPositive = true;
+  }
+  // an investment file: buys and sells move money inside the account, so leave them out
+  if (rows.some(r => TRADE_WORDS.test(Object.values(r).join(' ')))) { map.skip = ['buy', 'bought', 'sell', 'sold', 'reinvest']; map.balance = undefined; }
+  return parseMapped(text, map, 'x').transactions.length ? map : null;
+}
+
+// Where a file says whose account it is: the lines above its column names, and a column named Account. Descriptions are left out,
+// because a transfer's description names the OTHER account ("Transfer to SAV ...8527").
+export function accountText(text) {
+  const { headers, preamble, rows } = findHeader(text);
+  const col = headers.find(x => /^(account|account (number|#|no\.?)|acct)/i.test(x));
+  return [preamble, ...(col ? rows.slice(0, 200).map(r => `account ${r[col]}`) : [])].join('\n');
+}
+// Account numbers mentioned inside a file: "Account ...3013", "Acct x3013", "ending in 3013", "XXXX3013", "*3013", "#3013".
+// Only numbers written like an account number count, so amounts and years in the file are never taken for one.
+export const accountDigitsInText = text => [...new Set([...String(text).matchAll(/(?:account|acct|ending(?: in)?|card)\b[^\d\n]{0,12}?(\d{4})(?!\d)|(?:x{2,}|\*{1,}|•+|\.{3}|#)\s?(\d{4})(?!\d)/gi)].map(m => m[1] ?? m[2]))];

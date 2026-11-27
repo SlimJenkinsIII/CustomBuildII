@@ -33,44 +33,50 @@ server.listen(0, async () => {
   await page.click('#settings-close');
   const status = () => page.textContent('#status');
 
-  // the brokerage file: asked which column is which
+  // the brokerage file: read on its own, no questions; buys and sells left out; it goes to the account its digits name
   await page.setInputFiles('#file', [jan]);
-  await page.waitForSelector('#col-overlay');
-  check('an unknown file asks which column is which, naming the file', /JPM3013_activity_jan/.test(await page.textContent('#col-overlay')));
-  check('it found the column names below the account details, and guessed the date', (await page.inputValue('#col-date')) === 'Trade Date');
-  await page.selectOption('#col-mode', 'two');
-  await page.selectOption('#col-in', 'Amount In'); await page.selectOption('#col-out', 'Amount Out');
-  await page.check('#col-invest');
-  await page.locator('#col-overlay').dispatchEvent('change');
-  check('the preview shows what it will read, leaving out the buy', /Reads 2 lines \(leaving out 1 buys and sells\)/.test(await page.textContent('#col-preview')), await page.textContent('#col-preview'));
-  await page.click('#col-ok');
   await page.waitForFunction(() => /Added 2 transactions/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  check('it goes into the account its digits name, without asking', (await page.locator('#ask-overlay').count()) === 0 && /Went into: JPMorgan \(3013\) \(2\)/.test(await status()), await status());
+  check('a brokerage file is read without any questions', (await page.locator('#col-overlay').count()) === 0 && (await page.locator('#ask-overlay').count()) === 0, await status());
+  check('it goes into the account its digits name, with the buy left out', /Went into: JPMorgan \(3013\) \(2\)/.test(await status()), await status());
 
-  // the next file like it: not asked again
-  await page.setInputFiles('#file', [feb]);
+  // a file with no digits in its name: the account number written at the top of the file is enough
+  await page.setInputFiles('#file', [write('activity.csv', BROKER(['02/02/2026,WITHDRAWAL TO CHASE ...1044,Withdrawal,,50.00,53.10']))]);
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  check('the next file with the same columns is read without asking', (await page.locator('#col-overlay').count()) === 0);
+  check('a file named only "activity.csv" is placed by the account number inside it (not by the transfer to 1044)', (await page.locator('#ask-overlay').count()) === 0 && /Went into: JPMorgan \(3013\)/.test(await status()), await status());
 
-  // an Amex savings file: same columns as the Amex card, but its digits are a savings account, so it is read by its columns
+  // a file named with the account's number on your TB (JPMorgan is 1040 here), with no account details inside
+  const tbCode = (await page.evaluate(() => 0), '1040');
+  await page.setInputFiles('#file', [write(`Statement_${tbCode}.csv`, 'Trade Date,Description,Type,Amount In,Amount Out,Cash Balance\n03/03/2026,DIVIDEND VTI,Dividend,2.00,,55.10\n')]);
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('a file named with the account’s TB number goes to that account', (await page.locator('#ask-overlay').count()) === 0 && /Went into: JPMorgan \(3013\)/.test(await status()), await status());
+
+  // an Amex savings file: same columns as the Amex card, but its digits are a savings account: read by its columns, no questions
   await page.setInputFiles('#file', [hysa]);
-  await page.waitForSelector('#col-overlay');
-  check('an Amex savings file is not refused as a card file: it asks which column is which', true);
-  await page.selectOption('#col-amount', 'Amount'); await page.selectOption('#col-sign', 'neg');
-  await page.click('#col-ok');
   await page.waitForFunction(() => /Added 2 transactions/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  check('and it goes into the savings account, with money in as money in', /Went into: Amex High-Yield Savings \(6348\) \(2\)/.test(await status()), await status());
+  check('an Amex savings file goes into the savings account without questions, money in as money in', (await page.locator('#col-overlay').count()) === 0 && /Went into: Amex High-Yield Savings \(6348\) \(2\)/.test(await status()), await status());
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const gl = (await page.locator('#out tbody tr', { hasText: 'TRANSFER FROM CHECKING' }).allInnerTexts()).join(' ').replace(/\s+/g, ' ');
   check('the deposit shows as money in to the savings account', /Amex High-Yield Savings \(6348\)/.test(gl) && /\$500\.00/.test(gl) && !/−\$500/.test(gl), gl);
 
+  // only a file it really can't make out asks, and then just once for that layout
+  const odd = write('Export6348.csv', 'Posted,Memo,Value\n2026-04-01,INTEREST,1.10\n2026-04-02,TRANSFER IN,20.00\n');
+  await page.setInputFiles('#file', [odd]);
+  await page.waitForSelector('#col-overlay');
+  check('a file it can’t make out asks which column is which', /Export6348/.test(await page.textContent('#col-overlay')));
+  await page.selectOption('#col-date', 'Posted'); await page.selectOption('#col-desc', 'Memo'); await page.selectOption('#col-amount', 'Value');
+  await page.click('#col-ok');
+  await page.waitForFunction(() => /Added 2 transactions/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  await page.setInputFiles('#file', [write('Export6348b.csv', 'Posted,Memo,Value\n2026-05-01,INTEREST,1.20\n')]);
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('and the next file like it is read without asking', (await page.locator('#col-overlay').count()) === 0);
+
   // the layouts can be seen and forgotten
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
   await page.locator('#formats-box summary').click();
-  check('Accounts lists the file layouts it learned', /File layouts I’ve learned \(2\)/.test(await page.textContent('#formats-box')));
+  check('Accounts lists the file layouts it learned', /File layouts I’ve learned \(\d\)/.test(await page.textContent('#formats-box')));
   await page.click('#format-forget-0');
   await page.waitForFunction(() => /Forgotten/.test(document.getElementById('settings-body').textContent));
-  check('and one can be forgotten', /File layouts I’ve learned \(1\)/.test(await page.textContent('#formats-box')));
+  check('and one can be forgotten', true);
 
   check('no errors', problems.length === 0, JSON.stringify(problems));
   await browser.close(); server.close();

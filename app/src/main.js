@@ -1,4 +1,4 @@
-import { parseStatement, toCents } from './parsers.js';
+import { parseStatement, toCents , findHeader, headerKey, parseMapped, flexDate, cleanFormats } from './parsers.js';
 import { orphanAccounts, moveOrphans, dropAccountLines, withIds, mergeTransactions, mergeIntoAccount } from './ledger.js';
 import { matchTransfers } from './transfers.js';
 import { categorize } from './rules.js';
@@ -33,7 +33,7 @@ const storage = PREVIEW ? memoryStorage() : indexedDbStorage();
 // ---------- state ----------
 // Saved (encrypted): raw statements, your category choices, trips, plan, TB coding. Everything else is derived.
 const state = {
-  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, merged: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], anchors: [], sync: null,
+  raw: [], overrides: {}, trips: [], coding: {}, names: {}, customs: [], parents: {}, removed: {}, merged: {}, learned: {}, fuel: { ...DEFAULT_FUEL }, venmoDetail: [], accounts: [], anchors: [], formats: [], sync: null,
   txs: [], ym: null, year: null, month: '', tab: 'budget', fsPage: 'tb', returnTo: null, open: (() => { try { return new Set(JSON.parse(localStorage.getItem('my-budget-open') ?? '[]')); } catch { return new Set(); } })(), period: '4w', exp: { from: '', to: '', names: 'merchant', open: false }, bulk: { sel: new Set(), view: 'review', q: '', ym: '', limit: 150, last: null, undo: null, note: '' },
   gl: { cat: '', ym: '', q: '', week: '', ask: false, acct: '', from: '', to: '' },
   tbView: 'bal', tie: '', opening: { date: DEFAULT_OPENING_DATE, balances: {} },
@@ -105,17 +105,17 @@ function recompute() {
 // A file names its account by the last four digits. When the name settles it, nothing is asked; when it can't (digits you haven't set
 // up, or several accounts of one kind), a small window asks once, and what you answer is remembered for next time.
 // Which of your accounts a file can go into: a Venmo file only into Venmo, a bank file into any asset account, a card file into any card.
-const accountsForFormat = format => Object.keys(SOURCE_ACCOUNTS).filter(k => (format === 'venmo' ? typeOf(k) === 'venmo'
+const accountsForFormat = format => Object.keys(SOURCE_ACCOUNTS).filter(k => (format === 'mapped' ? typeOf(k) !== 'venmo' : format === 'venmo' ? typeOf(k) === 'venmo'
   : format === 'chase-checking' ? (SOURCE_ROLES[k] ?? 'asset') === 'asset' && typeOf(k) !== 'venmo' : SOURCE_ROLES[k] === 'liability'))
   .sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code));
-const kindOfFile = format => (format === 'venmo' ? 'Venmo' : format === 'chase-checking' ? 'bank account' : 'credit card');
+const kindOfFile = format => (format === 'mapped' ? 'bank or investment' : format === 'venmo' ? 'Venmo' : format === 'chase-checking' ? 'bank account' : 'credit card');
 
 // A file names its account by the last four digits. When the name settles it, nothing is asked; otherwise a small window asks which of
 // your accounts it is, and what you answer is remembered (the digits are saved on that account) for next time.
 function askAccount({ fileName, format, digits }) {
   return new Promise(resolve => {
     const options = accountsForFormat(format);
-    const kinds = Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo' && (format === 'chase-checking' ? k !== 'card' : k === 'card'));
+    const kinds = Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo' && (format === 'mapped' ? true : format === 'chase-checking' ? k !== 'card' : k === 'card'));
     const pick = h('select', { id: 'ask-account', 'aria-label': 'Account' },
       options.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].name}${last4Of(k) ? ` (${last4Of(k)})` : ''}` })),
       format === 'venmo' ? [] : h('option', { value: '__new', text: 'A new account…' }));
@@ -148,12 +148,75 @@ function askAccount({ fileName, format, digits }) {
   });
 }
 
+// A file the app doesn't know: you say once which column is the date, the description and the amount. A preview shows the first lines
+// read that way, and the answer is remembered for every file with the same columns. Nothing leaves this device.
+function askColumns(fileName, text) {
+  return new Promise(resolve => {
+    const { headers, rows } = findHeader(text);
+    const sample = k => rows.find(r => r[k])?.[k] ?? '';
+    const guess = re => headers.find(x => re.test(x)) ?? '';
+    const pick = (id, label, re, optional = true) => {
+      const sel = h('select', { id, 'aria-label': label },
+        optional && h('option', { value: '', text: '(none)' }),
+        headers.filter(Boolean).map(x => h('option', { value: x, text: `${x}${sample(x) ? `  (e.g. ${sample(x).slice(0, 24)})` : ''}`, selected: x === guess(re) })));
+      return [h('label', { for: id, text: label }), sel];
+    };
+    const mode = h('select', { id: 'col-mode', 'aria-label': 'How amounts are shown' },
+      h('option', { value: 'one', text: 'One amount column' }), h('option', { value: 'two', text: 'Separate money-in and money-out columns' }));
+    const sign = h('select', { id: 'col-sign', 'aria-label': 'Which way amounts go' },
+      h('option', { value: 'neg', text: 'Money out is negative (−50.00)' }), h('option', { value: 'pos', text: 'Money out is positive (50.00), money in negative' }));
+    const invest = h('input', { type: 'checkbox', id: 'col-invest' });
+    const preview = h('div', { class: 'note', id: 'col-preview' });
+    const msg = h('p', { class: 'msg', role: 'status' });
+    const grid = h('div', { class: 'field-grid' },
+      ...pick('col-date', 'Date', /date/i, false), ...pick('col-desc', 'Description', /desc|detail|memo|payee|name|action|transaction/i),
+      h('label', { for: 'col-mode', text: 'Amounts' }), mode,
+      ...pick('col-amount', 'Amount', /amount|value|net/i), ...pick('col-in', 'Money in', /credit|deposit|in\b/i), ...pick('col-out', 'Money out', /debit|withdraw|out\b/i),
+      h('label', { for: 'col-sign', text: 'Sign' }), sign,
+      ...pick('col-bal', 'Running balance (optional)', /balance/i));
+    const map = () => {
+      const v = id => document.getElementById(id).value || undefined;
+      const two = mode.value === 'two';
+      return { key: headerKey(headers), date: v('col-date'), description: v('col-desc'), amount: two ? undefined : v('col-amount'), credit: two ? v('col-in') : undefined, debit: two ? v('col-out') : undefined,
+        balance: v('col-bal'), outIsPositive: !two && sign.value === 'pos', skip: invest.checked ? ['buy', 'bought', 'sell', 'sold', 'reinvest'] : [] };
+    };
+    const show = () => {
+      const two = mode.value === 'two';
+      for (const id of ['col-amount', 'col-sign']) { const el = document.getElementById(id); el.hidden = two; el.previousElementSibling.hidden = two; }
+      for (const id of ['col-in', 'col-out']) { const el = document.getElementById(id); el.hidden = !two; el.previousElementSibling.hidden = !two; }
+      const m = map();
+      if (!m.date || !(m.amount || (m.debit && m.credit))) { preview.textContent = 'Pick the date column and the amount column(s).'; return; }
+      const r = parseMapped(text, m, 'preview');
+      preview.textContent = r.transactions.length
+        ? `Reads ${plural(r.transactions.length, 'line', 'lines')}${r.skipped ? ` (leaving out ${r.skipped} buys and sells)` : ''}${r.unreadable ? `, ${r.unreadable} I couldn’t read` : ''}. First ones: ` + r.transactions.slice(0, 3).map(t => `${fmtFull(t.date)} ${t.description.slice(0, 30)} ${money(t.cents)}`).join(' · ')
+        : 'Nothing could be read that way: check the date and amount columns.';
+    };
+    const done = v => { overlay.remove(); resolve(v); };
+    const overlay = h('div', { class: 'overlay', id: 'col-overlay' }, h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'col-title' },
+      h('h2', { id: 'col-title', text: 'Which column is which?' }),
+      h('p', { class: 'sub', text: `I don’t know this kind of file yet (${fileName}). Tell me once which column is which and I’ll read every file like it the same way.` }),
+      grid,
+      h('label', { class: 'row-form', style: 'margin-top:8px' }, invest, h('span', { text: 'Investment account: leave out buys and sells (they move money inside the account, they aren’t spending)' })),
+      preview, msg,
+      h('div', { class: 'row-form' },
+        h('button', { type: 'button', class: 'btn', id: 'col-ok', text: 'Read the file this way', onclick: () => {
+          const m = map();
+          if (!m.date || !(m.amount || (m.debit && m.credit)) || !parseMapped(text, m, 'x').transactions.length) { msg.className = 'msg error'; msg.textContent = 'Pick columns that read at least one line (see the preview).'; return; }
+          done(m);
+        } }),
+        h('button', { type: 'button', class: 'btn ghost', id: 'col-skip', text: 'Skip this file', onclick: () => done(null) }))));
+    document.body.append(overlay);
+    overlay.addEventListener('change', show);
+    show();
+  });
+}
+
 // Which of your accounts a file belongs to: by its digits, else the only account it could be, else ask.
 async function accountForUpload(file, format) {
   const options = accountsForFormat(format);
   const named = accountForFile(file.name);
   if (named) {
-    if (!options.includes(named)) throw new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which can't take this kind of file (${kindOfFile(format)}).`);
+    if (!options.includes(named)) { const e = new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which can't take this kind of file (${kindOfFile(format)}).`); e.mismatch = true; throw e; }
     return { key: named };
   }
   const digits = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));              // years in a name are not account digits
@@ -170,17 +233,37 @@ async function importFiles(files) {
   if (state.demo) { $('status').textContent = 'Turn off dummy numbers (Settings) before adding statements.'; return; }
   let added = 0, moved = 0, skipped = 0, external = 0, details = [];
   const left = [], movedInto = new Set(), wentInto = new Map(), balanceNotes = [];
-  const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors };
+  const before = { raw: state.raw, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, formats: state.formats };
   try {
     for (const file of files) {
       const text = await file.text();
       let parsed;
+      let mapping = null;
       try { parsed = parseStatement(text); }
-      catch (err) { throw new Error(`${file.name}: ${err.message}`); }
-      const where = await accountForUpload(file, parsed.format);
+      catch (err) {
+        if (!err.unknown) throw new Error(`${file.name}: ${err.message}`);
+        const key = headerKey(findHeader(text).headers);
+        mapping = state.formats.find(f => f.key === key) ?? await askColumns(file.name, text);
+        if (!mapping) { left.push(file.name); continue; }
+        if (!state.formats.some(f => f.key === mapping.key)) state.formats = [...state.formats, mapping];
+        parsed = { format: 'mapped', ...parseMapped(text, mapping, '') };
+      }
+      let where;
+      try { where = await accountForUpload(file, parsed.format); }
+      catch (err) {
+        // looks like a card file, but its digits are a bank or savings account (an Amex savings file has the same columns as the card):
+        // read it by its columns instead
+        if (!err.mismatch || mapping) throw err;
+        const key = headerKey(findHeader(text).headers);
+        mapping = state.formats.find(f => f.key === key) ?? await askColumns(file.name, text);
+        if (!mapping) { left.push(file.name); continue; }
+        if (!state.formats.some(f => f.key === mapping.key)) state.formats = [...state.formats, mapping];
+        parsed = { format: 'mapped', ...parseMapped(text, mapping, '') };
+        where = await accountForUpload(file, 'mapped');
+      }
       if (!where) { left.push(file.name); continue; }
       if (where.accounts) { state.accounts = where.accounts; recompute(); }
-      parsed = parseStatement(text, where.key);
+      parsed = mapping ? { format: 'mapped', ...parseMapped(text, mapping, where.key) } : parseStatement(text, where.key);
       const r = mergeIntoAccount(state.raw, withIds(parsed.transactions), where.key, DEFAULT_OF_FAMILY[familyForFormat(parsed.format)]);
       state.anchors = mergeAnchors(state.anchors, parsed.anchors);
       {
@@ -209,7 +292,7 @@ async function importFiles(files) {
   resetGl();
   recompute();
   render();
-  if (added || moved || details.length || state.accounts !== before.accounts || state.anchors !== before.anchors) markDirty();
+  if (added || moved || details.length || state.accounts !== before.accounts || state.anchors !== before.anchors || state.formats !== before.formats) markDirty();
 }
 $('undo-import').addEventListener('click', () => {
   if (!lastImport) return;
@@ -227,7 +310,7 @@ $('file').addEventListener('change', e => {
 });
 
 // ---------- saving ----------
-const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, sync: state.sync, opening: state.opening });
+const snapshot = () => ({ version: 1, raw: state.raw, overrides: state.overrides, trips: state.trips, plan, coding: state.coding, names: state.names, customs: state.customs, parents: state.parents, removed: state.removed, merged: state.merged, learned: state.learned, fuel: state.fuel, venmoDetail: state.venmoDetail, accounts: state.accounts, anchors: state.anchors, formats: state.formats, sync: state.sync, opening: state.opening });
 
 // True once you have an asset account of your own besides the main checking and Venmo (a savings account from your list). From then on a
 // transfer between your accounts is just a transfer, and the built-in savings placeholders get nothing.
@@ -267,11 +350,12 @@ function loadSnapshot(d) {
   state.sync = cleanKeys(d.sync);
   state.opening = cleanOpening(d.opening);
   state.anchors = cleanAnchors(d.anchors);
+  state.formats = cleanFormats(d.formats);
   try { validatePlan(d.plan); plan = d.plan; } catch { plan = samplePlan; }
 }
 
 function clearMemory() {
-  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; state.merged = {}; applyRemoved({}, {}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; state.anchors = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
+  state.raw = []; state.overrides = {}; state.trips = []; state.coding = {}; state.names = {}; state.customs = []; state.removed = {}; state.merged = {}; applyRemoved({}, {}); state.parents = {}; applyParents({}); state.sync = null; state.learned = {}; state.fuel = { ...DEFAULT_FUEL }; state.venmoDetail = []; state.accounts = []; state.anchors = []; state.formats = []; applyAccountList([]); state.opening = { date: DEFAULT_OPENING_DATE, balances: {} }; state.txs = [];
   state.ym = null; state.year = null; resetGl();
   plan = samplePlan;
 }
@@ -805,7 +889,7 @@ function renderGlRows() {
   const body = $('out').querySelector('tbody');
   body.replaceChildren();
   for (const t of list) {
-    const notes = [t.transfer === 'unmatched' && t.category === 'review' && 'other side not imported', t.transfer === 'unmatched' && t.category === 'transfer' && 'card payment · other account not imported', t.transfer === 'suggested' && 'possible transfer', t.askReimbursement && 'paid back?', t.chosen && 'your choice', t.byHand && 'entered by hand'].filter(Boolean);
+    const notes = [t.transfer === 'unmatched' && t.category === 'review' && 'other side not imported', t.category === 'transfer' && t.transfer !== 'matched' && 'other half not imported yet', t.transfer === 'suggested' && 'possible transfer', t.askReimbursement && 'paid back?', t.chosen && 'your choice', t.byHand && 'entered by hand'].filter(Boolean);
     const tr = body.insertRow();
     tr.insertCell().textContent = fmtDate(t.date);
     tr.insertCell().textContent = t.description;
@@ -2208,6 +2292,12 @@ function renderAccountsScreen(body) {
       h('div', { class: 'stack', style: 'margin-top:8px' },
         h('p', { class: 'note', text: 'One per line, with the last four digits in brackets, like Chase Savings (8527). I work out the kind from the words (you can change it afterwards). The first checking account and card take over the ones already here, so nothing already imported is lost; every other line becomes its own account.' }),
         paste, h('button', { type: 'button', class: 'btn', id: 'acct-paste-go', text: 'Set up these accounts', onclick: addAll }))),
+    state.formats.length ? h('details', { class: 'fine', id: 'formats-box' }, h('summary', { text: `File layouts I’ve learned (${state.formats.length})` }),
+      h('div', { class: 'stack', style: 'margin-top:8px' },
+        h('p', { class: 'note', text: 'How I read files I didn’t know. If one was set up wrong, forget it and I’ll ask again next time you upload that kind of file.' }),
+        state.formats.map((f, i) => h('div', { class: 'acct-row' },
+          h('span', { class: 'acct-meta', text: `Date: ${f.date} · ${f.amount ? `Amount: ${f.amount}${f.outIsPositive ? ' (money out positive)' : ''}` : `In: ${f.credit}, Out: ${f.debit}`}${f.description ? ` · Description: ${f.description}` : ''}${f.balance ? ` · Balance: ${f.balance}` : ''}${f.skip?.length ? ' · leaves out buys and sells' : ''}` }),
+          h('button', { type: 'button', class: 'btn ghost small', id: `format-forget-${i}`, text: 'Forget', onclick: () => { state.formats = state.formats.filter((_, j) => j !== i); refresh('Forgotten. I’ll ask how to read that kind of file next time.'); } }))))) : null,
     h('details', { class: 'fine' }, h('summary', { text: 'Add one account' }), h('div', { class: 'stack', style: 'margin-top:8px' }, one)),
     msg);
 }

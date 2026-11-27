@@ -124,9 +124,10 @@ export function parseStatement(text, account = '') {
     const dates = vrows.filter(r => r['Datetime'] && /^(complete|issued)$/i.test(r['Status'])).map(r => r['Datetime'].slice(0, 10));
     return { format: 'venmo', transactions: v.transactions, notes: v.notes, anchors: venmoAnchors(vrows, acct, dates) };
   }
-  const rows = parseCsvObjects(text);
-  const format = detectFormat(rows.length ? Object.keys(rows[0]) : []);
-  if (!format) throw new Error('Unrecognized statement format. Expected a Chase, Amex or Venmo CSV.');
+  let rows = parseCsvObjects(text);
+  let format = detectFormat(rows.length ? Object.keys(rows[0]) : []);
+  if (!format) { const f = findHeader(text); const alt = detectFormat(f.headers); if (alt) { format = alt; rows = f.rows; } }
+  if (!format) { const e = new Error('Unrecognized statement format. Expected a Chase, Amex or Venmo CSV.'); e.unknown = true; throw e; }
   const fn = { 'chase-checking': chaseChecking, 'chase-card': chaseCard, amex }[format];
   const acct = account || format;
   const out = { format, transactions: fn(rows, acct), anchors: [] };
@@ -136,4 +137,65 @@ export function parseStatement(text, account = '') {
     out.anchors = endOfDayBalances(lines).map(a => ({ account: acct, ...a, kind: 'file' }));
   }
   return out;
+}
+
+// ---------- any other bank's CSV: you say which column is which, once ----------
+// Many files start with a few lines of account details before the column names. The column-name row is the first one, within the
+// first 15, that has a date-like heading and at least two other headings.
+export function findHeader(text) {
+  const rows = parseCsv(text);
+  const at = rows.slice(0, 15).findIndex(r => r.filter(c => c.trim()).length >= 3 && r.some(c => /date/i.test(c)));
+  const i = at < 0 ? 0 : at;
+  const headers = (rows[i] ?? []).map(c => c.trim());
+  const body = rows.slice(i + 1).filter(r => r.filter(c => c.trim()).length >= 2);
+  return { headers, rows: body.map(r => Object.fromEntries(headers.map((k, j) => [k, (r[j] ?? '').trim()]))) };
+}
+// A stable fingerprint of a file's columns, so the same kind of file is read the same way next time.
+export const headerKey = headers => headers.map(h => h.toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean).join('|');
+
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+// Reads 01/05/2026, 1/5/26, 2026-01-05, 2026-01-05T10:00:00, "Jan 5, 2026" and "05 Jan 2026". null if it can't.
+export function flexDate(str) {
+  const s = String(str ?? '').trim();
+  let m;
+  if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return iso(+m[1], +m[2], +m[3]);
+  if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/))) return iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[1], +m[2]);
+  if ((m = s.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/)) && MONTHS[m[1].toLowerCase()]) return iso(+m[3], MONTHS[m[1].toLowerCase()], +m[2]);
+  if ((m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?\s+(\d{4})/)) && MONTHS[m[2].toLowerCase()]) return iso(+m[3], MONTHS[m[2].toLowerCase()], +m[1]);
+  return null;
+}
+const iso = (y, mo, d) => (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null);
+const money = v => { const t = String(v ?? '').trim(); if (!t || t === '-' || t === '--') return 0; try { return toCents(t); } catch { return null; } };
+
+// map: { date, description, amount } or { date, description, debit, credit }, plus optional { balance, outIsPositive, skip }.
+//   outIsPositive: the file shows money out as a positive number (cards often do), so the sign is flipped.
+//   skip: words that mark rows to leave out, like buys and sells inside an investment account.
+// Returns { transactions, anchors, skipped, unreadable }.
+export function parseMapped(text, map, account) {
+  const { rows } = findHeader(text);
+  const skip = (map.skip ?? []).map(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'));
+  const out = [], lines = [];
+  let skipped = 0, unreadable = 0;
+  for (const r of rows) {
+    const date = flexDate(r[map.date]);
+    let cents = map.amount ? money(r[map.amount]) : (money(r[map.credit]) ?? 0) - Math.abs(money(r[map.debit]) ?? 0);
+    if (!date || cents === null) { unreadable++; continue; }
+    if (map.outIsPositive && map.amount) cents = -cents;
+    const description = (map.description ? r[map.description] : '') || Object.values(r).filter(Boolean).join(' ').slice(0, 80);
+    if (skip.length && skip.some(re => Object.values(r).some(v => re.test(v)))) { skipped++; continue; }
+    if (cents === 0) continue;
+    out.push({ date, description, cents, account, source: 'mapped' });
+    // an investment account's running balance is cash only (it drops when you buy shares), so it can't check the account once buys are left out
+    if (map.balance && !skip.length) { const b = money(r[map.balance]); if (b !== null && r[map.balance] !== '') lines.push({ date, cents, bal: b }); }
+  }
+  return { transactions: out, anchors: endOfDayBalances(lines).map(a => ({ account, ...a, kind: 'file' })), skipped, unreadable };
+}
+
+export function cleanFormats(raw) {
+  if (!Array.isArray(raw)) return [];
+  const str = v => (typeof v === 'string' && v.length <= 80 ? v : undefined);
+  return raw.filter(f => f && typeof f.key === 'string' && f.key.length <= 2000 && str(f.date) && (str(f.amount) || (str(f.debit) && str(f.credit))))
+    .map(f => ({ key: f.key, date: f.date, description: str(f.description), amount: str(f.amount), debit: str(f.debit), credit: str(f.credit), balance: str(f.balance),
+      outIsPositive: !!f.outIsPositive, skip: Array.isArray(f.skip) ? f.skip.filter(w => typeof w === 'string' && w.length <= 30).slice(0, 20) : [] }))
+    .slice(0, 50);
 }

@@ -94,7 +94,9 @@ function recompute() {
   const raw = state.raw.filter(t => t.byHand || !investing.has(t.account) || !TRADE.test(t.description ?? ''));
   const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(raw, state.venmoDetail), { accounts: acctInfo }), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings(), investmentAccounts: investing }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
-    const pick = migrateCategory(state.overrides[t.id]);
+    // a bank-funded Venmo payment: the bank line is the transfer into Venmo (any coding you gave it belongs to the payment now),
+    // and the payment out of Venmo takes your coding from the bank line unless you code it yourself
+    const pick = t.fundsVenmo || t.fromBankLine ? undefined : migrateCategory(state.overrides[t.id] ?? (t.fromBank ? state.overrides[t.fromBank] : undefined));
     const out = pick && CATEGORIES[pick] ? { ...t, category: pick, categoryReason: 'your choice', chosen: true } : t;
     const home = resolveCategory(out.category);
     // a main account (one with sub accounts under it) takes nothing of its own: the charge waits in Needs review until you pick a sub account
@@ -227,7 +229,9 @@ async function accountForUpload(file, format, text = '') {
     if (!options.includes(named)) { const e = new Error(`${file.name}: the digits belong to ${SOURCE_ACCOUNTS[named].name}, which can't take this kind of file (${kindOfFile(format)}).`); e.mismatch = true; throw e; }
     return { key: named };
   }
-  const digits = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));              // years in a name are not account digits
+  // the account number to remember: from the name, else the one the file gives at the top ("XXXX7788")
+  const nameDigits = digitsInName(file.name).filter(d => !/^(19|20)\d\d$/.test(d));              // years in a name are not account digits
+  const digits = nameDigits.length ? nameDigits : accountDigitsInText(accountText(text));
   if (options.length === 1 && (format === 'venmo' || !digits.length)) return { key: options[0] };
   // with no digits to go by, a file of a kind that only one of your accounts is (the one Amex card, the one Chase card) needs no question
   const ofKind = options.filter(k => familyOf(k) === familyForFormat(format));
@@ -308,7 +312,9 @@ async function importFiles(files) {
 }
 $('undo-import').addEventListener('click', () => {
   if (!lastImport) return;
-  state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = lastImport.accounts; state.anchors = lastImport.anchors;
+  // accounts you created stay: undo takes back the lines that came in, never an account you made
+  const made = state.accounts.filter(a => !lastImport.accounts.some(b => b.key === a.key));
+  state.raw = lastImport.raw; state.venmoDetail = lastImport.venmoDetail; state.accounts = [...lastImport.accounts, ...made]; state.anchors = lastImport.anchors;
   if (lastImport.opening) state.opening = lastImport.opening;
   if (lastImport.overrides) state.overrides = lastImport.overrides;
   lastImport = null; $('undo-import').hidden = true;

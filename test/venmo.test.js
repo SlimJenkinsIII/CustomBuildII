@@ -92,21 +92,23 @@ test('a cash-out with no deposit imported yet is held as a transfer, not left in
 const D = (date, cents, party, note) => ({ date, cents, party, note });
 const bankLine = (date, cents, description, id = date + description) => ({ id, account: 'chase-checking', date, cents, description });
 
-test('a bare VENMO PAYMENT on the bank statement is reworded with who you paid and why, once, by amount and nearby date', () => {
+test('a VENMO PAYMENT from the bank is a transfer into Venmo, then a payment out of Venmo to the person', () => {
   const txs = [bankLine('2026-03-06', -6000, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992'), bankLine('2026-03-06', -6000, 'WHOLEFDS MKT #1')];
   const out = enrichVenmo(txs, [D('2026-03-05', -6000, 'Riley Demo', 'Concert tickets')]);
-  assert.equal(out[0].description, 'TO RILEY DEMO: Concert tickets');
-  assert.equal(out[0].bankDescription, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992');   // the original wording is kept
-  assert.equal(out[0].id, txs[0].id);                                                         // same id: your choices on it stay attached
-  assert.equal(out[1].description, 'WHOLEFDS MKT #1');                                        // nothing else is touched
+  const bank = out.find(t => t.id === txs[0].id), into = out.find(t => t.fromBankLine), paid = out.find(t => t.fromBank);
+  assert.equal(bank.transfer, 'matched'); assert.equal(bank.pairId, into.id);                // the bank line is the transfer into Venmo
+  assert.equal(bank.bankDescription, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992');       // the original wording is kept
+  assert.deepEqual([into.account, into.cents], ['venmo', 6000]);                               // money arriving in Venmo
+  assert.deepEqual([paid.account, paid.cents, paid.description], ['venmo', -6000, 'TO RILEY DEMO: Concert tickets']);   // and leaving to the person
+  assert.equal(out.find(t => t.id === txs[1].id).description, 'WHOLEFDS MKT #1');           // nothing else is touched
 });
 
 test('each Venmo detail is used once, the closest date wins, and far-off or different amounts are not matched', () => {
   const txs = [bankLine('2026-03-04', -2500, 'VENMO PAYMENT 1', 'a'), bankLine('2026-03-09', -2500, 'VENMO PAYMENT 2', 'b'), bankLine('2026-03-05', -2600, 'VENMO PAYMENT 3', 'c')];
   const out = enrichVenmo(txs, [D('2026-03-08', -2500, 'Sam Sample', 'Rent'), D('2026-03-20', -2500, 'Far Away', 'Too late')]);
-  assert.equal(out.find(t => t.id === 'b').description, 'TO SAM SAMPLE: Rent');             // March 8 is closer to March 9 than to March 4
+  assert.equal(out.find(t => t.fromBank === 'b').description, 'TO SAM SAMPLE: Rent');        // March 8 is closer to March 9 than to March 4
+  assert.ok(!out.some(t => t.fromBank === 'a' || t.fromBank === 'c'));
   assert.equal(out.find(t => t.id === 'a').description, 'VENMO PAYMENT 1');
-  assert.equal(out.find(t => t.id === 'c').description, 'VENMO PAYMENT 3');                 // different amount
   assert.equal(enrichVenmo(txs, []), txs);
 });
 
@@ -122,9 +124,12 @@ test('details are merged without repeats, and nonsense in saved data is dropped'
   assert.deepEqual(cleanDetails(null), []);
 });
 
-test('the reworded line can then be sorted by who it went to, and a friend\'s name is not a transfer word', () => {
+test('after matching and coding: the bank line is a transfer, the payment to the person waits to be sorted, and is not a transfer', () => {
   const rows = categorize(matchTransfers(enrichVenmo(withIds([bankLine('2026-03-06', -6000, 'VENMO PAYMENT 1053903953802 WEB ID: 3264681992')]), [D('2026-03-05', -6000, 'Riley Demo', 'Concert tickets')])));
-  assert.equal(rows[0].description, 'TO RILEY DEMO: Concert tickets');
-  assert.equal(rows[0].category, 'review');
-  assert.ok(!rows[0].transfer);
+  assert.equal(rows.find(r => r.fundsVenmo).category, 'transfer');
+  assert.equal(rows.find(r => r.fromBankLine).category, 'transfer');
+  const paid = rows.find(r => r.fromBank);
+  assert.equal(paid.description, 'TO RILEY DEMO: Concert tickets');
+  assert.equal(paid.category, 'review');
+  assert.ok(!paid.transfer);
 });

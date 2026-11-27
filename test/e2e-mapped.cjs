@@ -79,6 +79,22 @@ server.listen(0, async () => {
   await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
   check('and the next file like it is read without asking', (await page.locator('#col-overlay').count()) === 0);
 
+  // a brokerage file for an account not set up yet: you add it while uploading; its number (from inside the file) is filled in and kept,
+  // and the account stays even if you undo the upload
+  const newOne = write('brokerage_activity.csv', ['Trade Date,Settlement Date,Account,Description,Symbol,Quantity,Price,Amount', '01/05/2026,01/05/2026,XXXX7788,ELECTRONIC FUNDS TRANSFER RECEIVED,,,,"1,000.00"', '01/06/2026,01/07/2026,XXXX7788,BOUGHT VTI,VTI,5,180,-900.00', '01/31/2026,01/31/2026,XXXX7788,DIVIDEND VTI,VTI,,,3.10'].join('\n'));
+  await page.setInputFiles('#file', [newOne]);
+  await page.waitForSelector('#ask-overlay');
+  check('the account number written in the file is filled in for the new account', (await page.inputValue('#ask-last4')) === '7788');
+  await page.selectOption('#ask-account', '__new'); await page.selectOption('#ask-kind', 'investment'); await page.fill('#ask-name', 'JPMorgan Brokerage'); await page.click('#ask-ok');
+  await page.waitForFunction(() => /Went into: JPMorgan Brokerage/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  await page.click('#undo-import');
+  await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
+  check('an account you created while uploading stays, even after Undo', (await page.locator('#acctname-investment-7788').count()) === 1 && (await page.inputValue('#acctdig-investment-7788')) === '7788');
+  await page.click('#settings-close');
+  await page.setInputFiles('#file', [newOne]);
+  await page.waitForFunction(() => /Went into: JPMorgan Brokerage \(2\)/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('and the next upload of that file goes straight to it, no questions', (await page.locator('#ask-overlay').count()) === 0);
+
   // the layouts can be seen and forgotten
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
   await page.locator('#formats-box summary').click();

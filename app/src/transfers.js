@@ -29,8 +29,9 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {}
   const names = (t, other) => { const d = (t.description ?? '').toLowerCase(); const a = accounts[other]; return !!a && ((a.last4 && d.includes(a.last4)) || words(other).some(w => d.includes(w))); };
   const putAway = key => ['investment', 'savings'].includes(accounts[key]?.type);
   // Rows you entered by hand are not statement rows, so they never pair with one.
-  const outs = transactions.filter(t => t.cents < 0 && !t.byHand);
-  const ins = transactions.filter(t => t.cents > 0 && !t.byHand);
+  // lines already paired (a bank-funded Venmo payment and the money it moved into Venmo) are left as they are
+  const outs = transactions.filter(t => t.cents < 0 && !t.byHand && !t.fixedPair);
+  const ins = transactions.filter(t => t.cents > 0 && !t.byHand && !t.fixedPair);
 
   // Every possible pairing: money out of one account, same amount into a DIFFERENT account, near in time.
   const candidates = [];
@@ -54,7 +55,8 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {}
       }
       const gap = Math.abs(dayNumber(o.date) - dayNumber(i.date));
       const invest = accounts[o.account]?.type === 'investment' || accounts[i.account]?.type === 'investment';
-      if (gap > (invest ? maxDays + 3 : maxDays)) continue;
+      const venmoMove = o.account === 'venmo' || i.account === 'venmo';
+      if (gap > (invest || venmoMove ? maxDays + 3 : maxDays)) continue;
       const hinted = HINT.test(o.description) || HINT.test(i.description) || names(o, i.account) || names(i, o.account) || putAway(o.account) || putAway(i.account);
       candidates.push({ o, i, gap, hinted, fee });
     }
@@ -88,6 +90,7 @@ export function matchTransfers(transactions, { maxDays = MAX_DAYS, accounts = {}
 
   return transactions.flatMap(t => {
     const found = info.get(t.id);
+    if (!found && t.fixedPair) return [t];
     if (found?.feeSplit) {
       // the cash-out is split: what reached the bank is the transfer, the rest is Venmo's fee
       const { feeSplit, ...rest } = found;

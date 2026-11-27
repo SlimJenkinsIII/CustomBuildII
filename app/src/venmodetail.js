@@ -20,7 +20,7 @@ export function cleanDetails(raw) {
     .map(d => ({ date: d.date, cents: d.cents, party: d.party.slice(0, 80), note: d.note.slice(0, 200) }));
 }
 
-// Returns the transactions with matching VENMO lines reworded as "TO SAM SAMPLE: Rent share". Each detail is used once, and the
+// Returns the transactions with each matching VENMO bank line turned into a transfer to Venmo, plus the Venmo payment "TO SAM SAMPLE: Rent share". Each detail is used once, and the
 // closest date wins. A line already reworded, or entered by hand, is left alone.
 export function enrichVenmo(txs, details) {
   if (!details.length) return txs;
@@ -37,5 +37,13 @@ export function enrichVenmo(txs, details) {
     free.delete(best);
     reword.set(best, `TO ${d.party.toUpperCase()}${d.note ? `: ${d.note}` : ''}`);
   }
-  return txs.map((t, i) => (reword.has(i) ? { ...t, description: reword.get(i), bankDescription: t.description, viaVenmo: true } : t));
+  // A payment funded from the bank is really two moves: money from the bank into Venmo (a transfer), then out of Venmo to the person
+  // (the spending). The bank line becomes the transfer; two Venmo lines are added: the money arriving, and the payment out. Your coding
+  // on the bank line carries to the payment (see `fromBank`), so nothing has to be done again.
+  return txs.flatMap((t, i) => {
+    if (!reword.has(i)) return [t];
+    const into = { id: `${t.id}#vin`, account: 'venmo', date: t.date, cents: -t.cents, description: 'VENMO TRANSFER FROM BANK', source: 'venmo', fromBankLine: t.id, transfer: 'matched', pairId: t.id, fixedPair: true };
+    const paid = { id: `${t.id}#vpay`, account: 'venmo', date: t.date, cents: t.cents, description: reword.get(i), source: 'venmo', fromBank: t.id, viaVenmo: true };
+    return [{ ...t, bankDescription: t.description, description: `${t.description.split(/\s+/).slice(0, 2).join(' ')} → Venmo (${reword.get(i).slice(3)})`, transfer: 'matched', pairId: into.id, fixedPair: true, fundsVenmo: true }, into, paid];
+  });
 }

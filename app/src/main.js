@@ -12,7 +12,8 @@ import { parseAccess, checkCode, fingerprint, ACCESS_FLAG } from './gate.js';
 import { createSyncClient, newSyncKeys, cleanKeys, pairingCode, parsePairingCode, planSync, SYNC_ORIGIN } from './sync.js';
 import { suggestPairs, applyMatchup, cleanMerged } from './matchup.js';
 import { hasKids, SOURCE_ROLES, ACCOUNT_TYPES, typeOf, roleOfType, FAMILIES, DEFAULT_OF_FAMILY, familyOf, familyForFormat, accountKeysOfFamily, last4Of, isCustomSource, applyAccountList, usedCodes, parentAccounts, ghostAccounts, CATEGORIES, SOURCE_ACCOUNTS, codeLabel, sourceLabel, applyTripNames, selectableCategories, applyCoding, setCode, cleanCoding, codingList, applyNames, setName, cleanNames, applyCustoms, cleanCustoms, parentOf, addAccount, repairHeaders, ADD_KINDS, moveAccount, cleanParents, applyParents, depthOf, headersAbove, organizeAssets, SECTIONS, removeSub, setMatch, customRules, applyRemoved, cleanRemoved, removeAccount, restoreAccount, removeTargets, removedList, resolveCategory, isRemoved, migrateCategory, MAX_TRIPS } from './categories.js';
-import { cleanPay, monthlyTakeHome, monthIncome, PAY_EVERY, DEFAULT_401K_LIMIT } from './paycheck.js';
+import { traceCash, deposits } from './trace.js';
+import { readPaychecks, cleanPay, monthlyTakeHome, monthIncome, PAY_EVERY, DEFAULT_401K_LIMIT } from './paycheck.js';
 import { weekSummary, weeklyRunning, monthSummary, startOfWeek, addDays, daysBetween, monthOf, plannedFreeCash, validatePlan } from './budget.js';
 import { asOfDate, monthPace, habits, attention, coverage, monthlyMatrix, completeWeeks, periodWindow, periodTotals, compareTotals, cumulativeSeries, categoryBreakdownRange, topPurchasesRange, diningOutRange, staleAccounts, defaultMonth } from './insights.js';
 import { assignTrips, addTrip, removeTrip, updateTrip } from './trips.js';
@@ -1619,7 +1620,61 @@ function savingsMoveForm(msg) {
         h('button', { class: 'btn', type: 'button', text: 'Add', onclick: add }))));
 }
 
+// ---------- follow the money ----------
+// Pick a deposit (a bonus, a paycheck) and see where every dollar of it went: spent, paid off on cards, moved to savings or still sitting
+// in an account. Money is used up oldest first (FIFO) or newest first (LIFO): you choose.
+function renderFollow() {
+  const roles = Object.fromEntries(Object.keys(SOURCE_ACCOUNTS).map(k => [k, SOURCE_ROLES[k] ?? 'asset']));
+  const list = deposits(state.txs, roles, state.opening.date).slice(0, 300);
+  const box = $('tie-follow');
+  if (!list.length) { fill(box, h('h2', { id: 'follow-title', text: 'Follow the money' }), h('p', { class: 'sub', text: 'No deposits to follow yet.' })); return; }
+  // bonuses are marked: from your pay details when they're in, otherwise from the Bonus account
+  const bonus = new Set(state.txs.filter(t => t.category === 'income_bonus').map(t => t.id));
+  if (plan.pay) for (const y of new Set(list.map(t => t.date.slice(0, 4)))) for (const r of readPaychecks(state.txs, plan.pay, y).rows) if (r.kind === 'bonus') bonus.add(r.id);
+  const f = state.follow ?? (state.follow = { id: null, method: 'fifo' });
+  if (!list.some(t => t.id === f.id)) f.id = (list.find(t => bonus.has(t.id)) ?? [...list].sort((a, b) => b.cents - a.cents)[0]).id;
+  const src = list.find(t => t.id === f.id);
+  const pick = h('select', { id: 'follow-pick', 'aria-label': 'Deposit to follow', onchange: e => { f.id = e.target.value; renderFollow(); } },
+    list.map(t => h('option', { value: t.id, selected: t.id === f.id, text: `${fmtFull(t.date)} · ${t.description.slice(0, 40)} · ${money(t.cents)}${bonus.has(t.id) ? ' · bonus' : ''}` })));
+  const how = h('select', { id: 'follow-method', 'aria-label': 'Which money is spent first', onchange: e => { f.method = e.target.value; renderFollow(); } },
+    h('option', { value: 'fifo', text: 'FIFO: oldest money spent first', selected: f.method === 'fifo' }),
+    h('option', { value: 'lifo', text: 'LIFO: newest money spent first', selected: f.method === 'lifo' }));
+  const r = traceCash(state.txs, { roles, opening: eff(), sources: [f.id], method: f.method });
+  const name = a => SOURCE_ACCOUNTS[a]?.name ?? a;
+  const label = cat => (cat && CATEGORIES[cat] ? codeLabel(cat) : 'Not sorted yet');
+  const line = (text, cents, id) => [h('span', { text }), h('span', { class: 'num', id, text: money(cents) })];
+  // groups by category, biggest first, each opening to its items
+  const groups = (items, catOf, itemText, idp) => {
+    const by = new Map();
+    for (const x of items) { const k = catOf(x) ?? ''; if (!by.has(k)) by.set(k, []); by.get(k).push(x); }
+    return [...by].map(([k, xs]) => [k, xs, xs.reduce((n, x) => n + x.cents, 0)]).sort((a, b) => b[2] - a[2]).map(([k, xs, sum]) =>
+      h('details', { class: 'follow-group' }, h('summary', {}, h('span', { text: label(k || null) }), h('span', { class: 'num', text: money(sum) })),
+        h('div', { class: 'follow-list' }, xs.sort((a, b) => b.cents - a.cents).flatMap(x => [h('span', { text: itemText(x) }), h('span', { class: 'num', text: money(x.cents) })]))));
+  };
+  const T = r.totals;
+  fill(box,
+    h('div', { class: 'card-head' }, h('h2', { id: 'follow-title', text: 'Follow the money' })),
+    h('p', { class: 'sub', text: 'Pick a deposit and see where every dollar of it went. Money moved between your accounts keeps its tag, and a card payment is followed through to the charges it paid off.' }),
+    h('div', { class: 'row-form' }, pick, how),
+    h('p', { style: 'margin:12px 0 0;font-weight:600', text: `${money(r.total)} from ${src.description.slice(0, 50)} on ${fmtFull(src.date)}` }),
+    h('div', { class: 'follow-sum', id: 'follow-sum' },
+      line('Still in your accounts', T.held, 'follow-held'),
+      line('Spent', T.spent, 'follow-spent'),
+      line('Paid off on cards', T.cards, 'follow-cards'),
+      T.transit ? line('In transit (the other side of a transfer isn’t imported)', T.transit, 'follow-transit') : [],
+      T.cardCredit ? line('Paid ahead on a card (a credit there)', T.cardCredit, 'follow-credit') : []),
+    r.held.length ? [h('h3', { class: 'set-h', text: 'Still in your accounts' }), h('div', { class: 'follow-list' }, r.held.sort((a, b) => b.cents - a.cents).flatMap(x => line(name(x.account), x.cents)))] : [],
+    r.spent.length ? [h('h3', { class: 'set-h', text: 'Spent' }), ...groups(r.spent, x => x.tx.category, x => `${fmtFull(x.tx.date)} · ${x.tx.description.slice(0, 50)} · ${name(x.tx.account)}`)] : [],
+    r.cards.length ? [h('h3', { class: 'set-h', text: 'Paid off on cards: what those charges were' }), ...groups(r.cards, x => x.charge.category, x => `${fmtFull(x.charge.date)} · ${x.charge.description.slice(0, 44)} · ${name(x.card)}, paid ${fmtFull(x.paidOn)}`)] : [],
+    r.transit.length ? [h('h3', { class: 'set-h', text: 'In transit' }), h('div', { class: 'follow-list' }, r.transit.flatMap(x => line(`${fmtFull(x.tx.date)} · ${x.tx.description.slice(0, 50)}`, x.cents)))] : [],
+    r.moves.length ? h('p', { class: 'note', text: 'Moved between your accounts along the way: ' + r.moves.map(m => `${money(m.cents)} ${name(m.from)} → ${name(m.to)} (${fmtFull(m.date)})`).join('; ') + '.' }) : null,
+    h('p', { class: 'note', text: f.method === 'fifo'
+      ? 'FIFO: each account spends the money it has had longest first, so a deposit is only drawn on once older money is used up.'
+      : 'LIFO: each account spends its newest money first, so a deposit is drawn on straight away.' }));
+}
+
 function renderTie() {
+  renderFollow();
   const months = [...new Set(state.txs.filter(t => t.date > state.opening.date).map(t => monthOf(t.date)))].sort().reverse();
   const asOf = asOfDate(state.txs);
   if (!months.length) {

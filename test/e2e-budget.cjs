@@ -84,6 +84,19 @@ server.listen(0, async () => {
   await page.click('#menu-btn'); await page.click('#tab-budget');
   check('remove the account and it leaves the plan, and its target stops counting', (await page.locator('#plan-acct-checking-7777').count()) === 0 && /Free cash: \$2,000 a month/.test(await page.textContent('#plan-summary')), await page.textContent('#plan-summary'));
 
+  // Tie-out: follow a deposit to see where it went
+  await page.click('#menu-btn'); await page.click('#tab-tie');
+  check('Follow the money starts on the bonus', /ACME CORP PAYROLL · \$4,050 · bonus/.test(await page.locator('#follow-pick option:checked').textContent()), await page.locator('#follow-pick option:checked').textContent());
+  check('nothing was spent after the bonus, so it is all still in checking', (await page.textContent('#follow-held')) === '$4,050' && (await page.textContent('#follow-spent')) === '$0');
+  const feb6 = await page.locator('#follow-pick option', { hasText: 'Feb 6, 2026' }).getAttribute('value');
+  await page.selectOption('#follow-pick', feb6);
+  const sum = (await page.textContent('#follow-sum')).replace(/\s+/g, ' ');
+  check('the first paycheck: $400 went to savings, $25 was spent, the rest is still there, and it adds up', (await page.textContent('#follow-held')) === '$2,675' && (await page.textContent('#follow-spent')) === '$25' && /\$400 Chase Checkings \(1044\) → Chase Savings \(8527\)/.test(await page.textContent('#tie-follow')), sum);
+  await page.locator('#tie-follow details summary').first().click();
+  check('each kind of spending opens to the items', /CHIPOTLE/.test(await page.textContent('#tie-follow')));
+  await page.selectOption('#follow-method', 'lifo');
+  check('LIFO can be chosen', (await page.textContent('#follow-held')) === '$2,675' && /LIFO: each account spends its newest money first/.test(await page.textContent('#tie-follow')));
+
   check('no errors', problems.length === 0, JSON.stringify(problems));
   await browser.close(); server.close();
   console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

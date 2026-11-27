@@ -40,7 +40,7 @@ server.listen(0, async () => {
 
   await page.click('#tab-fs'); await page.selectOption('#fs-page', 'gl');
   const rows = await page.locator('#out tbody tr', { hasText: 'Venmo balance' }).allInnerTexts();
-  check('Venmo shows as its own account in GL Detail, with the bank-funded payment moving in and out of it', rows.length === 7, `${rows.length} rows`);
+  check('Venmo shows as its own account in GL Detail, with the bank-funded payment moving in and out of it', rows.length === 9, `${rows.length} rows`);   // 5 from the Venmo file, and in-and-out for each of the two VENMO PAYMENT lines on checking
   check('a friend paying you is left for you to sort', rows.some(t => /FROM PAT EXAMPLE/.test(t) && /5900/.test(t)), rows.filter(t => /PAT EXAMPLE/.test(t)).join(' | ').replace(/\s+/g, ' '));
   check('a payment you made from your Venmo balance is an item to sort too', rows.some(t => /TO SAM SAMPLE: Rent share/.test(t) && /5900/.test(t)));
   check('the cash-out to the bank is held as a transfer, not spending', rows.some(t => /VENMO TRANSFER TO BANK/.test(t) && !/5900/.test(t)));
@@ -48,9 +48,9 @@ server.listen(0, async () => {
   const reworded = await page.locator('#out tbody tr', { hasText: 'TO RILEY DEMO: Concert tickets' }).allInnerTexts();
   check('a bare VENMO PAYMENT from the bank: the payment to the person is a Venmo line to sort, saying who and why', reworded.length === 1 && /Venmo balance/.test(reworded[0]) && /5900/.test(reworded[0]), reworded.join(' | ').replace(/\s+/g, ' '));
   const fromBank = (await page.locator('#out tbody tr', { hasText: '→ Venmo' }).allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
-  check('and the bank line is a transfer into Venmo, not spending', fromBank.length === 1 && /Chase checking/.test(fromBank[0]) && /Transfer \(not spending\)/.test(fromBank[0]), fromBank.join(' | '));
+  check('and the bank lines are transfers into Venmo, not spending (the one the Venmo file explains says who it was for)', fromBank.length === 2 && fromBank.every(x => /Chase checking/.test(x) && /Transfer \(not spending\)/.test(x)) && fromBank.some(x => /RILEY DEMO/.test(x)), fromBank.join(' | '));
   const arrived = (await page.locator('#out tbody tr', { hasText: 'VENMO TRANSFER FROM BANK' }).allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
-  check('the money arriving in Venmo is shown too, so it goes in and straight out', arrived.length === 1 && /Venmo balance/.test(arrived[0]) && /Transfer/.test(arrived[0]), arrived.join(' | '));
+  check('the money arriving in Venmo is shown too, so it goes in and straight out', arrived.length === 2 && arrived.every(x => /Venmo balance/.test(x) && /Transfer/.test(x)), arrived.join(' | '));
   check('the payment is spending once only', (await page.locator('#out tbody tr', { hasText: 'Concert tickets' }).count()) === 2);
   const xfer = await page.locator('#out tbody tr', { hasText: 'transaction#: 31092522089' }).allInnerTexts();
   check('the two halves of a transfer between your own accounts pair up and are not spending', xfer.length === 2 && xfer.every(t => /Transfer \(not spending\)/.test(t)), xfer.join(' | ').replace(/\s+/g, ' '));

@@ -3,7 +3,7 @@ import { orphanAccounts, moveOrphans, dropAccountLines, withIds, mergeTransactio
 import { matchTransfers } from './transfers.js';
 import { categorize, TRADE } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
-import { mergeDetails, cleanDetails, enrichVenmo } from './venmodetail.js';
+import { mergeDetails, cleanDetails, enrichVenmo , bridgeVenmo } from './venmodetail.js';
 import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, setType, addAccountOfType } from './accounts.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
@@ -92,7 +92,7 @@ function recompute() {
   const investing = new Set(Object.keys(SOURCE_ACCOUNTS).filter(k => typeOf(k) === 'investment'));
   // buys and sells inside an investment account (from files read before they were left out) are not money moving: they are dropped
   const raw = state.raw.filter(t => t.byHand || !investing.has(t.account) || !TRADE.test(t.description ?? ''));
-  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(matchTransfers(enrichVenmo(raw, state.venmoDetail), { accounts: acctInfo }), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings(), investmentAccounts: investing }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
+  const auto = assignTrips(applyLearned(applyFuelSplit(categorize(bridgeVenmo(matchTransfers(enrichVenmo(raw, state.venmoDetail), { accounts: acctInfo })), { userRules: customRules(state.customs), ownAccounts: hasOwnSavings(), investmentAccounts: investing }), state.fuel), state.learned, id => !!CATEGORIES[id]), state.trips);
   state.txs = auto.map(t => {
     // a bank-funded Venmo payment: the bank line is the transfer into Venmo (any coding you gave it belongs to the payment now),
     // and the payment out of Venmo takes your coding from the bank line unless you code it yourself

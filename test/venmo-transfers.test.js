@@ -37,3 +37,17 @@ test('the Venmo file labels money moved either way, and re-reading an older impo
   assert.equal(r.merged[0].description, 'VENMO TRANSFER FROM BANK (Chase Checking)');
   assert.equal(r.merged[0].id, old[0].id);                                   // same line, same id: your coding on it stays
 });
+
+test('a Venmo line on checking that finds no partner is still a Venmo move, never left for review', async () => {
+  const { bridgeVenmo } = await import('../app/src/venmodetail.js');
+  const lines = [t('p', 'chase-checking', '2026-04-02', -4500, 'VENMO PAYMENT 1098877'), t('c', 'chase-checking', '2026-04-03', 12000, 'VENMO CASHOUT PPD')];
+  const out = categorize(bridgeVenmo(matchTransfers(lines)));
+  assert.equal(out.find(x => x.id === 'p').category, 'transfer');                         // checking -> Venmo
+  assert.equal(out.find(x => x.fromBankLine === 'p').category, 'transfer');                // arriving in Venmo
+  const paid = out.find(x => x.fromBank === 'p');
+  assert.deepEqual([paid.account, paid.cents, paid.category], ['venmo', -4500, 'review']); // and paid out of Venmo: the spending to sort
+  assert.equal(out.find(x => x.id === 'c').category, 'transfer');                         // Venmo -> checking
+  // a pair that already matched is left alone
+  const both = categorize(bridgeVenmo(matchTransfers([t('o', 'venmo', '2026-04-05', -5000, 'VENMO TRANSFER TO BANK'), t('i', 'chase-checking', '2026-04-06', 5000, 'VENMO CASHOUT')])));
+  assert.equal(both.length, 2); assert.ok(both.every(x => x.transfer === 'matched' && x.category === 'transfer'));
+});

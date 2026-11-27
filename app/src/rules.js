@@ -100,6 +100,8 @@ export function categorize(transactions, {
       const savingsCat = other && t.cents < 0 ? savingsAccounts[other.account] : undefined;
       category = savingsCat ?? 'transfer';
       why = savingsCat ? `transfer into ${other.account}` : 'matched transfer';
+    } else if (t.venmoCashIn) {
+      category = 'transfer'; why = 'money from Venmo (the Venmo side isn’t imported for this date)';
     } else if (investmentAccounts.has(t.account) && brokerageKind(t)) {
       // a brokerage account needs no coding: what each line is follows from its wording
       [category, why] = brokerageKind(t);

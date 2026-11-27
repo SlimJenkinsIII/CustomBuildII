@@ -47,3 +47,18 @@ export function enrichVenmo(txs, details) {
     return [{ ...t, bankDescription: t.description, description: `${t.description.split(/\s+/).slice(0, 2).join(' ')} → Venmo (${reword.get(i).slice(3)})`, transfer: 'matched', pairId: into.id, fixedPair: true, fundsVenmo: true }, into, paid];
   });
 }
+
+// Any bank or card line that mentions Venmo is money moving between that account and Venmo. Run after transfers are matched:
+// what found its other half already is left alone. For the rest:
+//   - money out to Venmo: a transfer into Venmo, plus the Venmo payment it paid for (to sort), the same as a payment the Venmo file
+//     explains; so the spending is never lost and the bank line is never left in Needs review
+//   - money in from Venmo (a cash-out): a transfer from Venmo, waiting for its other half if your Venmo file doesn't cover it
+export function bridgeVenmo(txs) {
+  return txs.flatMap(t => {
+    if (t.account === 'venmo' || t.byHand || t.fixedPair || t.transfer === 'matched' || !/venmo/i.test(t.description ?? '')) return [t];
+    if (t.cents > 0) return [{ ...t, venmoCashIn: true }];
+    const into = { id: `${t.id}#vin`, account: 'venmo', date: t.date, cents: -t.cents, description: 'VENMO TRANSFER FROM BANK', source: 'venmo', fromBankLine: t.id, transfer: 'matched', pairId: t.id, fixedPair: true };
+    const paid = { id: `${t.id}#vpay`, account: 'venmo', date: t.date, cents: t.cents, description: 'VENMO PAYMENT (who and why aren’t in your Venmo file)', source: 'venmo', fromBank: t.id, viaVenmo: true };
+    return [{ ...t, bankDescription: t.bankDescription ?? t.description, description: `${t.description.split(/\s+/).slice(0, 2).join(' ')} → Venmo`, transfer: 'matched', pairId: into.id, fixedPair: true, fundsVenmo: true }, into, paid];
+  });
+}

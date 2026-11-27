@@ -102,7 +102,7 @@ server.listen(0, async () => {
   await page.setInputFiles('#file', SAMPLES);
   await page.waitForSelector('#panel-budget:not([hidden]) #bgt-summary .hero-num');
   const n = await txCount();
-  check('statements load', n === 74, `(${n} transactions)`);
+  check('statements load (the VENMO PAYMENT on checking also shows as money into Venmo and paid out of it)', n === 76, `(${n} transactions)`);
   check('banner warns data is not saved', await page.locator('#savebanner').isVisible() && (await chip()) === 'Not saved yet');
 
   // ---------- the Budget tab looks back ----------
@@ -397,7 +397,7 @@ server.listen(0, async () => {
   check('flight filed under the trip Travel account (7110)', (await delta.innerText()).includes('7110 Lisbon'), (await delta.innerText()).replace(/\s+/g, ' '));
   check('GL shows the renumbered account', (await glRow('WHOLEFDS').innerText()).includes('5455 Groceries'));
   await page.fill('#gl-q', 'delta');
-  check('search narrows the list', (await page.locator('#out tbody tr').count()) === 1 && /1 of 74/.test(await page.textContent('#gl-count')));
+  check('search narrows the list', (await page.locator('#out tbody tr').count()) === 1 && /1 of 76/.test(await page.textContent('#gl-count')));
   await page.click('text=Clear all filters');
   check('clearing filters brings everything back', (await page.locator('#out tbody tr').count()) === n);
   await page.selectOption('#gl-cat', 'free_groceries');
@@ -489,7 +489,7 @@ server.listen(0, async () => {
   // ---------- drill down from Budget and come back ----------
   await page.click('#tab-budget');
   await page.locator('#where .catrow').first().click();
-  check('tapping a category opens GL Detail, filtered', (await onGL()) && /\d+ of 74/.test(await page.textContent('#gl-count')));
+  check('tapping a category opens GL Detail, filtered', (await onGL()) && /\d+ of 76/.test(await page.textContent('#gl-count')));
   check('there is a Back button', /Back to Budget/.test(await page.textContent('#gl-back')));
   await page.click('#gl-back');
   check('Back returns to Budget', (await page.getAttribute('#tab-budget', 'aria-selected')) === 'true');

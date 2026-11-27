@@ -95,6 +95,15 @@ server.listen(0, async () => {
   await page.waitForFunction(() => /Went into: JPMorgan Brokerage \(2\)/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
   check('and the next upload of that file goes straight to it, no questions', (await page.locator('#ask-overlay').count()) === 0);
 
+  // an Amex card file for a card nobody has set up: one tap, with the name, kind and digits already filled in
+  await page.setInputFiles('#file', [write('Amex_activity_1005.csv', 'Date,Description,Card Member,Account #,Amount\n04/02/2026,TRADER JOES,ME,-91005,42.10\n')]);
+  await page.waitForSelector('#ask-overlay');
+  check('a file for an account nobody has yet offers a new account, ready to add', /A new account\?/.test(await page.textContent('#ask-overlay')) && (await page.inputValue('#ask-account')) === '__new' && (await page.inputValue('#ask-kind')) === 'card' && (await page.inputValue('#ask-name')).length > 0, `${await page.inputValue('#ask-name')} / ${await page.inputValue('#ask-kind')}`);
+  check('and no column questions for a file the app knows', (await page.locator('#col-overlay').count()) === 0);
+  check('the digits from the file name are filled in', (await page.inputValue('#ask-last4')) === '1005'); await page.click('#ask-ok');
+  await page.waitForFunction(() => /Added 1 transaction/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('one tap adds it and the file goes in', /Went into: .*\(1\)/.test(await status()), await status());
+
   // the layouts can be seen and forgotten
   await page.click('#gear'); await page.locator('#settings-body .menu-row', { hasText: 'Accounts' }).click();
   await page.locator('#formats-box summary').click();

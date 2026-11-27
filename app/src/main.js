@@ -4,7 +4,7 @@ import { matchTransfers } from './transfers.js';
 import { categorize, TRADE } from './rules.js';
 import { nestRows, addMaps, isHidden } from './nesting.js';
 import { mergeDetails, cleanDetails, enrichVenmo , bridgeVenmo } from './venmodetail.js';
-import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, setType, addAccountOfType } from './accounts.js';
+import { cleanAccounts, accountForFile, digitsInName, addFromList, setLast4, setType, addAccountOfType, guessType } from './accounts.js';
 import { glExport, chartExport, toCsv, exportFileName, NAME_MODES } from './glexport.js';
 import { applyFuelSplit, cleanFuel, DEFAULT_FUEL } from './fuel.js';
 import { filterItems, applyBulk, undoBulk, similarTo, rangeBetween, learn, forget, applyLearned, cleanLearned, merchantKey } from './bulk.js';
@@ -119,26 +119,40 @@ const kindOfFile = format => (format === 'mapped' ? 'bank or investment' : forma
 
 // A file names its account by the last four digits. When the name settles it, nothing is asked; otherwise a small window asks which of
 // your accounts it is, and what you answer is remembered (the digits are saved on that account) for next time.
+// A good first guess at a new account from the file: its kind and a name, from the words in the file name and the kind of file.
+function guessNew(fileName, format, digits) {
+  const base = fileName.replace(/\.[A-Za-z0-9]+$/, '').replace(/[_\-.]+/g, ' ').replace(/\b(activity|transactions?|statement|export|download|history|csv)\b/gi, '').replace(/\d+/g, '').replace(/\s+/g, ' ').trim();
+  const who = /amex|american express/i.test(fileName) || format === 'amex' ? 'Amex' : /chase/i.test(fileName) || format === 'chase-checking' || format === 'chase-card' ? 'Chase' : '';
+  const type = guessType(`${fileName} ${base}`) !== 'checking' ? guessType(`${fileName} ${base}`) : format === 'amex' || format === 'chase-card' ? 'card' : 'checking';
+  const word = { checking: 'Checking', savings: 'Savings', investment: 'Investment', card: 'Card' }[type];
+  const name = (base && !/^(amex|chase)$/i.test(base) ? base.replace(/\b\w/g, c => c.toUpperCase()) : [who, word].filter(Boolean).join(' ')) + (digits[0] ? ` (${digits[0]})` : '');
+  return { name: name.trim(), type };
+}
+
 function askAccount({ fileName, format, digits }) {
   return new Promise(resolve => {
-    const options = accountsForFormat(format);
-    const kinds = Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo' && (format === 'mapped' ? true : format === 'chase-checking' ? k !== 'card' : k === 'card'));
+    // a file can go into any account of yours (an Amex savings file has the same columns as an Amex card)
+    const options = format === 'venmo' ? accountsForFormat(format) : Object.keys(SOURCE_ACCOUNTS).filter(k => typeOf(k) !== 'venmo').sort((a, b) => SOURCE_ACCOUNTS[a].code.localeCompare(SOURCE_ACCOUNTS[b].code));
+    const kinds = Object.entries(ACCOUNT_TYPES).filter(([k]) => k !== 'venmo');
+    const guess = guessNew(fileName, format, digits);
+    // digits nobody has yet: almost always a new account, so that is the choice already made, with its name, kind and digits filled in
+    const isNew = format !== 'venmo' && (digits.length > 0 || !options.length);
     const pick = h('select', { id: 'ask-account', 'aria-label': 'Account' },
       options.map(k => h('option', { value: k, text: `${SOURCE_ACCOUNTS[k].name}${last4Of(k) ? ` (${last4Of(k)})` : ''}` })),
-      format === 'venmo' ? [] : h('option', { value: '__new', text: 'A new account…' }));
-    const nm = h('input', { id: 'ask-name', type: 'text', maxlength: '60', placeholder: 'Name, like Chase Savings', 'aria-label': 'Name of the new account' });
-    const kind = h('select', { id: 'ask-kind', 'aria-label': 'Kind of account' }, kinds.map(([k, label]) => h('option', { value: k, text: label })));
+      format === 'venmo' ? [] : h('option', { value: '__new', text: 'A new account…', selected: isNew }));
+    const nm = h('input', { id: 'ask-name', type: 'text', maxlength: '60', value: isNew ? guess.name : '', placeholder: 'Name, like Chase Savings', 'aria-label': 'Name of the new account' });
+    const kind = h('select', { id: 'ask-kind', 'aria-label': 'Kind of account' }, kinds.map(([k, label]) => h('option', { value: k, text: label, selected: k === guess.type })));
     const l4 = h('input', { id: 'ask-last4', type: 'text', inputmode: 'numeric', maxlength: '4', value: digits[0] ?? '', placeholder: 'Last 4 digits', 'aria-label': 'Last 4 digits' });
-    const fields = h('div', { class: 'row-form', hidden: true }, nm, kind, l4);
+    const fields = h('div', { class: 'row-form', hidden: !isNew }, nm, kind, l4);
     pick.addEventListener('change', () => { fields.hidden = pick.value !== '__new'; });
     const msg = h('p', { class: 'msg', role: 'status' });
     const done = value => { overlay.remove(); resolve(value); };
     const overlay = h('div', { class: 'overlay', id: 'ask-overlay' }, h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ask-title' },
-      h('h2', { id: 'ask-title', text: 'Which account is this file?' }),
+      h('h2', { id: 'ask-title', text: isNew ? 'A new account?' : 'Which account is this file?' }),
       h('p', { class: 'sub', text: `${fileName} looks like a ${kindOfFile(format)} statement.${digits.length ? ` Its name has ${digits.join(' and ')} in it, which isn't one of your accounts yet.` : ''} Pick the account it belongs to and I'll remember it.` }),
       pick, fields, msg,
       h('div', { class: 'row-form' },
-        h('button', { type: 'button', class: 'btn', id: 'ask-ok', text: 'Use this account', onclick: () => {
+        h('button', { type: 'button', class: 'btn', id: 'ask-ok', text: isNew ? 'Add it' : 'Use this account', onclick: () => {
           try {
             if (pick.value === '__new') {
               const out = addAccountOfType(state.accounts, { name: nm.value, type: kind.value, last4: l4.value }, state.coding);
@@ -277,6 +291,13 @@ async function importFiles(files) {
       if (where.accounts) { state.accounts = where.accounts; recompute(); }
       if (mapping?.investment && typeOf(where.key) !== 'investment' && (SOURCE_ROLES[where.key] ?? 'asset') === 'asset' && !['chase-checking', 'venmo'].includes(where.key)) {
         state.accounts = setType(state.accounts, where.key, 'investment'); recompute();          // a brokerage file: its account is an investment account
+      }
+      // a card-style file put into a bank, savings or investment account (an Amex savings file): read it by its columns instead
+      if (!mapping && (parsed.format === 'amex' || parsed.format === 'chase-card') && SOURCE_ROLES[where.key] !== 'liability') {
+        const key = headerKey(findHeader(text).headers);
+        mapping = state.formats.find(f => f.key === key) ?? autoMap(text) ?? await askColumns(file.name, text);
+        if (!mapping) { left.push(file.name); continue; }
+        if (!state.formats.some(f => f.key === mapping.key)) state.formats = [...state.formats, mapping];
       }
       const readAs = mapping && typeOf(where.key) === 'investment' ? { ...mapping, skip: TRADE_SKIP, balance: undefined } : mapping;
       parsed = readAs ? { format: 'mapped', ...parseMapped(text, readAs, where.key) } : parseStatement(text, where.key);
